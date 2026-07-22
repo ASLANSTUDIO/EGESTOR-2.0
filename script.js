@@ -123,9 +123,25 @@
             withdrawals = wdRes.data.map(mapWithdrawal);
             employees = empRes.data.map(mapEmployee);
             salaryPayments = salRes.data.map(mapSalaryPayment);
+
+            // Auto-seed default sectors if empty
+            if (sectors.length === 0) {
+                for (const s of DEFAULT_SECTORS) {
+                    const { data: newRows } = await supabase.from('sectors').insert(s).select();
+                    if (newRows && newRows[0]) sectors.push(mapSector(newRows[0]));
+                }
+            }
+
+            // Auto-seed default rules if empty
+            if (rules.length === 0) {
+                for (const r of DEFAULT_RULES) {
+                    const { data: newRows } = await supabase.from('rules').insert(r).select();
+                    if (newRows && newRows[0]) rules.push(mapRule(newRows[0]));
+                }
+            }
         } catch (err) {
             console.error('Error loading data:', err);
-            showToast('Erro ao carregar dados do servidor.', 'error');
+            showToast('Erro ao carregar dados do servidor: ' + err.message, 'error');
         }
     }
 
