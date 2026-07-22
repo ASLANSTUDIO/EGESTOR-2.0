@@ -146,7 +146,7 @@
     }
 
     function mapSector(s) {
-        return { id: s.id, name: s.name, color: s.color, icon: s.icon || 'building' };
+        return { id: s.id, name: s.name, color: s.color, icon: s.icon || 'building', logo: s.logo || null };
     }
 
     function mapRule(r) {
@@ -402,24 +402,29 @@
     }
 
     // ─── CRUD: Sectors ───
-    async function addSector(name, icon) {
+    async function addSector(name, logo) {
         if (sectors.some(s => s.name.toLowerCase() === name.toLowerCase())) return showToast('Já existe um sector com este nome.', 'error');
         const colors = ['#1a8a5c','#d4a843','#3498db','#9b59b6','#e74c3c','#f39c12','#2ecc71','#1abc9c','#e67e22','#2980b9'];
         const color = colors[sectors.length % colors.length];
-        const { error, data: newRows } = await supabase.from('sectors').insert({ name, color, icon }).select();
+        const icon = logo ? 'image' : 'building';
+        const { error, data: newRows } = await supabase.from('sectors').insert({ name, color, icon, logo }).select();
         if (error) return showToast('Erro ao adicionar sector: ' + error.message, 'error');
         if (newRows && newRows[0]) sectors.push(mapSector(newRows[0]));
         refreshAll();
         showToast('Sector adicionado com sucesso!', 'success');
     }
 
-    async function updateSector(id, name, icon) {
+    async function updateSector(id, name, logo) {
         const sector = sectors.find(s => s.id === id);
         if (!sector) return;
-        const { error } = await supabase.from('sectors').update({ name, icon }).eq('id', id);
+        const icon = logo ? 'image' : (sector.icon !== 'image' ? sector.icon : 'building');
+        const updates = { name, icon, logo };
+        if (!logo) updates.logo = null;
+        const { error } = await supabase.from('sectors').update(updates).eq('id', id);
         if (error) return showToast('Erro ao actualizar: ' + error.message, 'error');
         sector.name = name;
-        sector.icon = icon;
+        sector.icon = logo ? 'image' : (sector.icon !== 'image' ? sector.icon : 'building');
+        sector.logo = logo || null;
         refreshAll();
         showToast('Sector actualizado.', 'success');
     }
@@ -529,6 +534,11 @@
         return s && s.icon ? s.icon : 'building';
     }
 
+    function getSectorLogo(id) {
+        const s = sectors.find(s => s.id === id);
+        return s ? s.logo : null;
+    }
+
     function getRuleName(id) {
         const r = rules.find(r => r.id === id);
         return r ? r.name : 'Desconhecido';
@@ -583,8 +593,8 @@
 
         const container = $('#recentTransactions');
         const allMovements = [
-            ...transactions.map(t => ({ ...t, _label: t.sectorId, _tag: getSectorName(t.sectorId), _icon: getSectorIcon(t.sectorId) })),
-            ...withdrawals.map(w => ({ ...w, _label: w.fundId, _tag: (w.description && w.description.startsWith('Salário:') ? '💰 ' : '') + getRuleName(w.fundId), _icon: null })),
+            ...transactions.map(t => ({ ...t, _label: t.sectorId, _tag: getSectorName(t.sectorId), _icon: getSectorIcon(t.sectorId), _logo: getSectorLogo(t.sectorId) })),
+            ...withdrawals.map(w => ({ ...w, _label: w.fundId, _tag: (w.description && w.description.startsWith('Salário:') ? '💰 ' : '') + getRuleName(w.fundId), _icon: null, _logo: null })),
             ...salaryPayments.map(p => {
                 const emp = employees.find(e => e.id === p.employeeId);
                 return {
@@ -605,7 +615,14 @@
             container.innerHTML = allMovements.map(m => {
                 const isEntry = m.type === 'entry';
                 const isSalary = m.type === 'salary';
-                const icon = m._icon && isEntry ? `<i class="fas fa-${m._icon}"></i>` : `<i class="fas fa-${isEntry ? 'arrow-down' : isSalary ? 'money-bill' : 'arrow-up'}"></i>`;
+                let icon;
+                if (isEntry && m._logo) {
+                    icon = `<img src="${m._logo}" class="recent-logo-img">`;
+                } else if (isEntry && m._icon) {
+                    icon = `<i class="fas fa-${m._icon}"></i>`;
+                } else {
+                    icon = `<i class="fas fa-${isEntry ? 'arrow-down' : isSalary ? 'money-bill' : 'arrow-up'}"></i>`;
+                }
                 const sign = isEntry ? '+' : '-';
                 const cls = isEntry ? 'entry' : 'withdraw';
                 return `
@@ -869,18 +886,22 @@
     // ─── Render: Admin ───
     function renderAdmin() {
         const list = $('#sectorsList');
-        list.innerHTML = sectors.map(s => `
+        list.innerHTML = sectors.map(s => {
+            const logoHtml = s.logo
+                ? `<img src="${s.logo}" class="sector-logo-img" alt="${s.name}">`
+                : `<i class="fas fa-${s.icon || 'building'}"></i>`;
+            return `
             <div class="sector-item">
                 <div class="sector-info">
-                    <span class="sector-color" style="background:${s.color}"><i class="fas fa-${s.icon || 'building'}"></i></span>
+                    <span class="sector-color" style="background:${s.color}">${logoHtml}</span>
                     <span class="sector-name">${s.name}</span>
                 </div>
                 <div class="sector-actions">
                     <button class="btn-secondary btn-sm" onclick="window.__editSector('${s.id}')"><i class="fas fa-pen"></i></button>
                     <button class="btn-danger" style="padding:5px 10px;font-size:0.75rem" onclick="window.__deleteSector('${s.id}')"><i class="fas fa-trash-can"></i></button>
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
 
         const rulesList = $('#rulesList');
         rulesList.innerHTML = rules.map(r => `
@@ -957,9 +978,13 @@
             ? '<p class="empty-state">Nenhuma entrada no período</p>'
             : Object.entries(sectorTotals).sort((a, b) => b[1] - a[1]).map(([sid, amt]) => {
                 const pct = totalEntries > 0 ? (amt / totalEntries) * 100 : 0;
+                const logo = getSectorLogo(sid);
+                const iconHtml = logo
+                    ? `<img src="${logo}" class="report-logo-img">`
+                    : `<i class="fas fa-${getSectorIcon(sid)}"></i>`;
                 return `<div class="report-stat-item">
                     <div class="report-stat-left">
-                        <div class="report-stat-icon" style="background:${getSectorColor(sid)}20;color:${getSectorColor(sid)}"><i class="fas fa-${getSectorIcon(sid)}"></i></div>
+                        <div class="report-stat-icon" style="background:${getSectorColor(sid)}20;color:${getSectorColor(sid)}">${iconHtml}</div>
                         <span class="report-stat-name">${getSectorName(sid)}</span>
                     </div>
                     <div class="report-stat-values">
@@ -1170,33 +1195,48 @@
     window.__editSector = function (id) {
         const sector = sectors.find(s => s.id === id);
         if (!sector) return;
+        const logoPreview = sector.logo ? `<div class="logo-preview"><img src="${sector.logo}" class="logo-preview-img"><button type="button" class="btn-danger btn-sm" onclick="document.getElementById('modalSectorLogo').value='';document.getElementById('logoPreviewArea').innerHTML='';document.getElementById('logoPreviewArea').style.display='none'"><i class="fas fa-trash-can"></i></button></div>` : '';
         const body = `
             <div class="form-group">
                 <label>Nome do Sector</label>
                 <input type="text" id="modalSectorName" value="${sector.name}" placeholder="Nome do sector">
             </div>
             <div class="form-group">
-                <label>Ícone / Logótipo</label>
-                ${iconPickerHTML(sector.icon || 'building')}
+                <label>Logótipo Personalizado</label>
+                <input type="file" id="modalSectorLogo" accept="image/*" style="font-size:0.85rem">
+                <div id="logoPreviewArea" style="margin-top:8px">${logoPreview}</div>
+                <p class="form-hint">Faça upload de uma imagem (PNG, JPG) para usar como logótipo do sector</p>
             </div>
         `;
         openModal('Editar Sector', body,
             '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
             '<button class="btn-primary" onclick="window.__saveSector(\'' + id + '\')">Guardar</button>');
+        // Init file preview
         setTimeout(() => {
-            $$('.icon-option').forEach(el => el.addEventListener('click', function () {
-                $$('.icon-option').forEach(e => e.classList.remove('active'));
-                this.classList.add('active');
-            }));
+            const fileInput = $('#modalSectorLogo');
+            if (fileInput) {
+                fileInput.addEventListener('change', function () {
+                    const file = this.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function (e) {
+                        const area = $('#logoPreviewArea');
+                        area.style.display = '';
+                        area.innerHTML = `<div class="logo-preview"><img src="${e.target.result}" class="logo-preview-img"></div>`;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
         }, 50);
     };
 
     window.__saveSector = function (id) {
         const name = $('#modalSectorName').value.trim();
-        const activeIcon = document.querySelector('.icon-option.active');
-        const icon = activeIcon ? activeIcon.dataset.icon : 'building';
         if (!name) return showToast('O nome do sector é obrigatório.', 'error');
-        updateSector(id, name, icon);
+        const logoPreview = $('#logoPreviewArea');
+        const logoImg = logoPreview ? logoPreview.querySelector('.logo-preview-img') : null;
+        const logo = logoImg ? logoImg.src : null;
+        updateSector(id, name, logo);
         closeModal();
     };
 
@@ -1205,23 +1245,34 @@
     window.__addSector = function () {
         openModal('Novo Sector de Entrada',
             '<div class="form-group"><label>Nome do Sector</label><input type="text" id="modalSectorName" placeholder="Ex: Parcerias"></div>' +
-            '<div class="form-group"><label>Ícone / Logótipo</label>' + iconPickerHTML('building') + '</div>',
+            '<div class="form-group"><label>Logótipo Personalizado</label><input type="file" id="modalSectorLogo" accept="image/*" style="font-size:0.85rem"><div id="logoPreviewArea" style="margin-top:8px;display:none"></div><p class="form-hint">Faça upload de uma imagem (PNG, JPG) para usar como logótipo do sector</p></div>',
             '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
             '<button class="btn-primary" onclick="window.__confirmAddSector()">Adicionar</button>');
         setTimeout(() => {
-            $$('.icon-option').forEach(el => el.addEventListener('click', function () {
-                $$('.icon-option').forEach(e => e.classList.remove('active'));
-                this.classList.add('active');
-            }));
+            const fileInput = $('#modalSectorLogo');
+            if (fileInput) {
+                fileInput.addEventListener('change', function () {
+                    const file = this.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function (e) {
+                        const area = $('#logoPreviewArea');
+                        area.style.display = '';
+                        area.innerHTML = `<div class="logo-preview"><img src="${e.target.result}" class="logo-preview-img"></div>`;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
         }, 50);
     };
 
     window.__confirmAddSector = function () {
         const name = $('#modalSectorName').value.trim();
-        const activeIcon = document.querySelector('.icon-option.active');
-        const icon = activeIcon ? activeIcon.dataset.icon : 'building';
         if (!name) return showToast('O nome do sector é obrigatório.', 'error');
-        addSector(name, icon);
+        const logoPreview = $('#logoPreviewArea');
+        const logoImg = logoPreview ? logoPreview.querySelector('.logo-preview-img') : null;
+        const logo = logoImg ? logoImg.src : null;
+        addSector(name, logo);
         closeModal();
     };
 

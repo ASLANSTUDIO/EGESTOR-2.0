@@ -591,6 +591,13 @@ body.employee-role .nav-item[data-role="all"] { display: flex; }
     align-items: center;
     justify-content: center;
     font-size: 0.85rem;
+    overflow: hidden;
+}
+
+.recent-item-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .recent-item-icon.entry { background: rgba(26,138,92,0.15); color: var(--accent); }
@@ -988,6 +995,13 @@ body.employee-role .nav-item[data-role="all"] { display: flex; }
     align-items: center;
     justify-content: center;
     font-size: 0.85rem;
+    overflow: hidden;
+}
+
+.sector-color img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .sector-name { font-size: 0.85rem; font-weight: 500; }
@@ -1050,6 +1064,27 @@ body.employee-role .nav-item[data-role="all"] { display: flex; }
 }
 
 .rules-validation.invalid i { color: var(--danger); }
+
+/* ─── Logo Upload ─── */
+.logo-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.logo-preview-img {
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    object-fit: cover;
+    border: 2px solid var(--card-border);
+}
+
+.form-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
 
 /* ─── Icon Picker ─── */
 .icon-picker {
@@ -1166,6 +1201,13 @@ body.employee-role .nav-item[data-role="all"] { display: flex; }
     justify-content: center;
     font-size: 0.75rem;
     flex-shrink: 0;
+    overflow: hidden;
+}
+
+.report-stat-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .report-stat-name {
