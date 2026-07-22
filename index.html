@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EGESTOR 2.0 - Controlo Financeiro Empresarial</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- ─── Login Screen ─── -->
+    <div class="login-screen" id="loginScreen">
+        <div class="login-container">
+            <div class="login-brand">
+                <i class="fas fa-shield-halved"></i>
+                <div class="login-brand-text">
+                    <span class="login-title">EGESTOR</span>
+                    <span class="login-version">2.0</span>
+                </div>
+                <p class="login-subtitle">Controlo Financeiro Empresarial</p>
+            </div>
+            <!-- Login Form -->
+            <form class="login-form active" id="loginForm">
+                <div class="form-group">
+                    <label><i class="fas fa-envelope"></i> Email</label>
+                    <input type="email" id="loginEmail" placeholder="admin@egestor.com" required>
+                </div>
+                <div class="form-group">
+                    <label><i class="fas fa-lock"></i> Palavra-passe</label>
+                    <input type="password" id="loginPassword" placeholder="••••••••" required>
+                </div>
+                <button type="submit" class="btn-primary btn-lg">
+                    <i class="fas fa-right-to-bracket"></i> Entrar
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ─── Main App ─── -->
+    <div class="app-container" id="appContainer" style="display:none;">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-shield-halved"></i>
+                    <div class="logo-text">
+                        <span class="logo-title">EGESTOR</span>
+                        <span class="logo-version">2.0</span>
+                    </div>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="dashboard" data-role="admin">
+                    <i class="fas fa-chart-pie"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-page="register" data-role="all">
+                    <i class="fas fa-plus-circle"></i>
+                    <span>Registar Entrada</span>
+                </a>
+                <a href="#" class="nav-item" data-page="employees" data-role="admin">
+                    <i class="fas fa-users"></i>
+                    <span>Funcionários</span>
+                </a>
+                <a href="#" class="nav-item" data-page="withdraw" data-role="admin">
+                    <i class="fas fa-hand-holding-dollar"></i>
+                    <span>Retirada de Fundos</span>
+                </a>
+                <a href="#" class="nav-item" data-page="reports" data-role="admin">
+                    <i class="fas fa-file-chart-column"></i>
+                    <span>Relatórios</span>
+                </a>
+                <a href="#" class="nav-item" data-page="history" data-role="admin">
+                    <i class="fas fa-clock-rotate-left"></i>
+                    <span>Histórico</span>
+                </a>
+                <a href="#" class="nav-item" data-page="admin" data-role="admin">
+                    <i class="fas fa-gear"></i>
+                    <span>Administração</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="logout-btn" id="logoutBtn">
+                    <i class="fas fa-right-from-bracket"></i>
+                    <span>Terminar Sessão</span>
+                </button>
+                <div class="security-badge">
+                    <i class="fas fa-lock"></i>
+                    <span>Dados protegidos</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Top Bar -->
+            <header class="topbar">
+                <button class="menu-toggle" id="menuToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="topbar-info">
+                    <span class="topbar-date" id="currentDate"></span>
+                    <div class="user-badge">
+                        <i class="fas fa-user-tie" id="userBadgeIcon"></i>
+                        <span id="userDisplayName">Administrador</span>
+                        <span class="role-badge" id="roleBadge">Admin</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Dashboard Page -->
+            <section class="page active" id="page-dashboard">
+                <div class="page-header">
+                    <h1><i class="fas fa-chart-pie"></i> Dashboard Financeiro</h1>
+                    <p class="page-subtitle">Visão geral dos fundos, saldos e movimentações</p>
+                </div>
+                <div class="summary-cards" id="summaryCards">
+                    <div class="summary-card total">
+                        <div class="card-icon"><i class="fas fa-sack-dollar"></i></div>
+                        <div class="card-info">
+                            <span class="card-label">Total de Entradas</span>
+                            <span class="card-value" id="totalEntries">0,00 Kz</span>
+                        </div>
+                    </div>
+                    <div class="summary-card total-withdraw">
+                        <div class="card-icon" style="background:linear-gradient(135deg,#dc3545,#e74c3c)"><i class="fas fa-arrow-up-from-bracket"></i></div>
+                        <div class="card-info">
+                            <span class="card-label">Total de Retiradas</span>
+                            <span class="card-value" id="totalWithdrawals">0,00 Kz</span>
+                        </div>
+                    </div>
+                    <div class="summary-card total-balance">
+                        <div class="card-icon" style="background:linear-gradient(135deg,#d4a843,#f1c40f)"><i class="fas fa-scale-balanced"></i></div>
+                        <div class="card-info">
+                            <span class="card-label">Saldo Líquido Total</span>
+                            <span class="card-value" id="netBalance">0,00 Kz</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="funds-grid" id="fundsGrid">
+                    <!-- Generated by JS -->
+                </div>
+                <div class="dashboard-charts">
+                    <div class="chart-card transactions-card">
+                        <h3><i class="fas fa-arrows-rotate"></i> Últimas Movimentações</h3>
+                        <div class="recent-transactions" id="recentTransactions">
+                            <p class="empty-state">Nenhuma movimentação registada</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Register Page -->
+            <section class="page" id="page-register">
+                <div class="page-header">
+                    <h1><i class="fas fa-plus-circle"></i> Registar Entrada</h1>
+                    <p class="page-subtitle">Registe uma nova entrada de valor e veja a distribuição automática</p>
+                </div>
+                <div class="form-container">
+                    <form id="entryForm">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="entryDate"><i class="fas fa-calendar"></i> Data de Entrada</label>
+                                <input type="date" id="entryDate" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="entryAmount"><i class="fas fa-money-bill"></i> Valor (Kz)</label>
+                                <input type="number" id="entryAmount" min="0.01" step="0.01" placeholder="0,00" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="entrySector"><i class="fas fa-building"></i> Sector de Entrada</label>
+                            <select id="entrySector" required></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="entryDescription"><i class="fas fa-note-sticky"></i> Descrição (opcional)</label>
+                            <textarea id="entryDescription" rows="2" placeholder="Descrição da entrada..."></textarea>
+                        </div>
+                        <button type="submit" class="btn-primary btn-lg">
+                            <i class="fas fa-check-circle"></i> Registar Entrada
+                        </button>
+                    </form>
+                </div>
+                <div class="distribution-preview" id="distributionPreview" style="display:none;">
+                    <h3><i class="fas fa-chart-simple"></i> Distribuição Automática</h3>
+                    <div class="distribution-bars" id="distributionBars"></div>
+                </div>
+            </section>
+
+            <!-- Withdraw Page -->
+            <section class="page" id="page-withdraw">
+                <div class="page-header">
+                    <h1><i class="fas fa-hand-holding-dollar"></i> Retirada de Fundos</h1>
+                    <p class="page-subtitle">Retire fundos de um dos sectores de distribuição</p>
+                </div>
+                <div class="form-container">
+                    <form id="withdrawForm">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="withdrawDate"><i class="fas fa-calendar"></i> Data da Retirada</label>
+                                <input type="date" id="withdrawDate" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="withdrawAmount"><i class="fas fa-money-bill"></i> Valor (Kz)</label>
+                                <input type="number" id="withdrawAmount" min="0.01" step="0.01" placeholder="0,00" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="withdrawFund"><i class="fas fa-piggy-bank"></i> Fundo de Origem</label>
+                            <select id="withdrawFund" required></select>
+                        </div>
+                        <div class="fund-balance-info" id="fundBalanceInfo">
+                            <i class="fas fa-info-circle"></i>
+                            <span>Saldo disponível neste fundo: <strong id="fundBalanceDisplay">0,00 Kz</strong></span>
+                        </div>
+                        <div class="form-group">
+                            <label for="withdrawDescription"><i class="fas fa-note-sticky"></i> Descrição (opcional)</label>
+                            <textarea id="withdrawDescription" rows="2" placeholder="Motivo da retirada..."></textarea>
+                        </div>
+                        <button type="submit" class="btn-danger btn-lg" id="withdrawSubmitBtn">
+                            <i class="fas fa-arrow-up-from-bracket"></i> Retirar Fundos
+                        </button>
+                    </form>
+                </div>
+                <!-- Withdrawal History -->
+                <div class="dashboard-charts" style="margin-top:24px;">
+                    <div class="chart-card transactions-card">
+                        <h3><i class="fas fa-clock-rotate-left"></i> Histórico de Retiradas</h3>
+                        <div class="table-container" style="border:none;background:transparent;">
+                            <table class="data-table" id="withdrawTable">
+                                <thead>
+                                    <tr>
+                                        <th>Data</th>
+                                        <th>Valor (Kz)</th>
+                                        <th>Fundo</th>
+                                        <th>Descrição</th>
+                                        <th>Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="withdrawHistoryBody">
+                                    <tr><td colspan="5" class="empty-state">Nenhuma retirada registada</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Employees Page -->
+            <section class="page" id="page-employees">
+                <div class="page-header">
+                    <h1><i class="fas fa-users"></i> Gestão de Funcionários</h1>
+                    <p class="page-subtitle">Cadastre funcionários, defina salários e registe pagamentos</p>
+                </div>
+                <div class="employee-layout">
+                    <div class="employee-form-col">
+                        <div class="form-container" style="max-width:100%;">
+                            <h3 style="margin-bottom:16px;font-size:1rem;"><i class="fas fa-user-plus"></i> Cadastrar Funcionário</h3>
+                            <form id="employeeForm">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="empName"><i class="fas fa-user"></i> Nome do Funcionário</label>
+                                        <input type="text" id="empName" placeholder="Nome completo" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="empSalary"><i class="fas fa-money-bill"></i> Salário (Kz)</label>
+                                        <input type="number" id="empSalary" min="0.01" step="0.01" placeholder="0,00" required>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="empFund"><i class="fas fa-piggy-bank"></i> Debitar Salário do Fundo</label>
+                                    <select id="empFund" required></select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="empSector"><i class="fas fa-building"></i> Sector de Entrada (acesso App)</label>
+                                    <select id="empSector" required></select>
+                                </div>
+                                <button type="submit" class="btn-primary btn-lg">
+                                    <i class="fas fa-floppy-disk"></i> Cadastrar Funcionário
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="employee-list-col">
+                        <div class="chart-card transactions-card">
+                            <h3><i class="fas fa-list"></i> Funcionários Cadastrados</h3>
+                            <div id="employeeList"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="dashboard-charts" style="margin-top:24px;">
+                    <div class="chart-card transactions-card">
+                        <h3><i class="fas fa-clock-rotate-left"></i> Histórico de Pagamentos</h3>
+                        <div class="table-container" style="border:none;background:transparent;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Data</th>
+                                        <th>Funcionário</th>
+                                        <th>Valor (Kz)</th>
+                                        <th>Fundo Debitado</th>
+                                        <th>Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="salaryPaymentBody">
+                                    <tr><td colspan="5" class="empty-state">Nenhum pagamento registado</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Reports Page -->
+            <section class="page" id="page-reports">
+                <div class="page-header">
+                    <h1><i class="fas fa-file-chart-column"></i> Relatórios Financeiros</h1>
+                    <p class="page-subtitle">Resumo completo de entradas, retiradas e distribuição por período</p>
+                </div>
+                <div class="report-controls">
+                    <div class="filter-group">
+                        <select id="reportPeriod">
+                            <option value="day">Dia</option>
+                            <option value="month" selected>Mês</option>
+                            <option value="year">Ano</option>
+                        </select>
+                        <input type="date" id="reportDate">
+                        <input type="month" id="reportMonth">
+                        <input type="number" id="reportYear" min="2020" max="2099" placeholder="AAAA">
+                        <button id="generateReport" class="btn-primary"><i class="fas fa-rotate"></i> Gerar</button>
+                    </div>
+                    <div class="export-group">
+                        <button id="exportReportPDF" class="btn-secondary"><i class="fas fa-file-pdf"></i> Exportar PDF</button>
+                    </div>
+                </div>
+                <div class="report-summary" id="reportSummary">
+                    <div class="report-card">
+                        <div class="card-icon" style="background:linear-gradient(135deg,#1a8a5c,#2ecc71);box-shadow:0 0 20px rgba(26,138,92,0.3)"><i class="fas fa-arrow-down"></i></div>
+                        <div class="card-info"><span class="card-label">Total Entradas</span><span class="card-value" id="repTotalEntries">0,00 Kz</span></div>
+                    </div>
+                    <div class="report-card">
+                        <div class="card-icon" style="background:linear-gradient(135deg,#dc3545,#e74c3c)"><i class="fas fa-arrow-up"></i></div>
+                        <div class="card-info"><span class="card-label">Total Retiradas</span><span class="card-value" id="repTotalWithdrawals">0,00 Kz</span></div>
+                    </div>
+                    <div class="report-card">
+                        <div class="card-icon" style="background:linear-gradient(135deg,#d4a843,#f1c40f)"><i class="fas fa-scale-balanced"></i></div>
+                        <div class="card-info"><span class="card-label">Saldo Líquido</span><span class="card-value" id="repNetBalance">0,00 Kz</span></div>
+                    </div>
+                    <div class="report-card">
+                        <div class="card-icon" style="background:linear-gradient(135deg,#3498db,#5dade2)"><i class="fas fa-list-check"></i></div>
+                        <div class="card-info"><span class="card-label">Total Mov.</span><span class="card-value" id="repTotalMov">0</span></div>
+                    </div>
+                </div>
+                <div class="report-detail-grid">
+                    <div class="chart-card transactions-card">
+                        <h3><i class="fas fa-building"></i> Entradas por Sector</h3>
+                        <div class="report-section-body" id="reportSectors"></div>
+                    </div>
+                    <div class="chart-card transactions-card">
+                        <h3><i class="fas fa-chart-pie"></i> Distribuição por Fundo</h3>
+                        <div class="report-section-body" id="reportFunds"></div>
+                    </div>
+                </div>
+                <div class="dashboard-charts">
+                    <div class="chart-card transactions-card">
+                        <h3><i class="fas fa-list"></i> Movimentações do Período</h3>
+                        <div id="reportMovements" class="report-movements"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- History Page -->
+            <section class="page" id="page-history">
+                <div class="page-header">
+                    <h1><i class="fas fa-clock-rotate-left"></i> Histórico Completo</h1>
+                    <p class="page-subtitle">Todas as entradas e retiradas registadas no sistema</p>
+                </div>
+                <div class="history-controls">
+                    <div class="filter-group">
+                        <input type="date" id="filterDate">
+                        <select id="filterSector"><option value="">Todos os Sectores</option></select>
+                        <select id="filterType">
+                            <option value="">Todos os Tipos</option>
+                            <option value="entry">Entradas</option>
+                            <option value="withdraw">Retiradas</option>
+                        </select>
+                        <button id="clearFilters" class="btn-secondary"><i class="fas fa-xmark"></i> Limpar</button>
+                    </div>
+                    <div class="export-group">
+                        <button id="exportCSV" class="btn-secondary"><i class="fas fa-file-csv"></i> Exportar CSV</button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Data</th>
+                                <th>Tipo</th>
+                                <th>Valor (Kz)</th>
+                                <th>Sector / Fundo</th>
+                                <th>Descrição</th>
+                                <th>F. Pessoal (35%)</th>
+                                <th>F. Investimento (30%)</th>
+                                <th>F. Caixa (35%)</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody">
+                            <tr><td colspan="9" class="empty-state">Nenhuma movimentação registada</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Admin Page -->
+            <section class="page" id="page-admin">
+                <div class="page-header">
+                    <h1><i class="fas fa-gear"></i> Administração</h1>
+                    <p class="page-subtitle">Gerir sectores de entrada e regras de distribuição</p>
+                </div>
+                <div class="admin-grid">
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fas fa-building"></i> Sectores de Entrada</h3>
+                            <button class="btn-primary btn-sm" id="addSectorBtn"><i class="fas fa-plus"></i> Novo Sector</button>
+                        </div>
+                        <p class="admin-card-desc">Personalize os sectores para classificar as entradas.</p>
+                        <div class="sectors-list" id="sectorsList"></div>
+                    </div>
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fas fa-chart-pie"></i> Regras de Distribuição</h3>
+                        </div>
+                        <p class="admin-card-desc">Percentuais fixos de distribuição automática.</p>
+                        <div class="rules-list" id="rulesList"></div>
+                        <div class="rules-validation" id="rulesValidation">
+                            <i class="fas fa-circle-check"></i> Total: <span id="rulesTotal">100</span>%
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modal Overlay -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal" id="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">Título</h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer" id="modalFooter"></div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>
