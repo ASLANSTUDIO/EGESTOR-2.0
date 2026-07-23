@@ -98,6 +98,27 @@
         }));
     }
 
+    // ─── Cache ───
+    function saveCache() {
+        try { localStorage.setItem('egestor_cache', JSON.stringify({ sectors, rules, transactions, withdrawals, employees, salaryPayments, _cachedAt: Date.now() })); } catch (_) {}
+    }
+
+    function loadCache() {
+        try {
+            const c = JSON.parse(localStorage.getItem('egestor_cache'));
+            if (c && c._cachedAt) {
+                sectors = (c.sectors || []).map(s => ({ ...s, logo: s.logo || null }));
+                rules = (c.rules || []).map(r => ({ ...r, logo: r.logo || null }));
+                transactions = c.transactions || [];
+                withdrawals = c.withdrawals || [];
+                employees = c.employees || [];
+                salaryPayments = c.salaryPayments || [];
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
     // ─── Supabase Data Load ───
     async function loadAllData() {
         try {
@@ -124,24 +145,25 @@
             employees = empRes.data.map(mapEmployee);
             salaryPayments = salRes.data.map(mapSalaryPayment);
 
-            // Auto-seed default sectors if empty
-            if (sectors.length === 0) {
+            // Auto-seed default sectors if empty (only when authenticated)
+            if (sectors.length === 0 && currentUser) {
                 for (const s of DEFAULT_SECTORS) {
-                    const { data: newRows } = await supabase.from('sectors').insert(s).select();
-                    if (newRows && newRows[0]) sectors.push(mapSector(newRows[0]));
+                    const { data: newRows, error: insErr } = await supabase.from('sectors').insert(s).select();
+                    if (!insErr && newRows && newRows[0]) sectors.push(mapSector(newRows[0]));
                 }
             }
 
-            // Auto-seed default rules if empty
-            if (rules.length === 0) {
+            // Auto-seed default rules if empty (only when authenticated)
+            if (rules.length === 0 && currentUser) {
                 for (const r of DEFAULT_RULES) {
-                    const { data: newRows } = await supabase.from('rules').insert(r).select();
-                    if (newRows && newRows[0]) rules.push(mapRule(newRows[0]));
+                    const { data: newRows, error: insErr } = await supabase.from('rules').insert(r).select();
+                    if (!insErr && newRows && newRows[0]) rules.push(mapRule(newRows[0]));
                 }
             }
+
+            saveCache();
         } catch (err) {
             console.error('Error loading data:', err);
-            showToast('Erro ao carregar dados do servidor: ' + err.message, 'error');
         }
     }
 
@@ -1318,6 +1340,7 @@
 
     // ─── Refresh ───
     function refreshAll() {
+        saveCache();
         if (currentPage === 'dashboard') renderDashboard();
         if (currentPage === 'register') populateSectorSelect();
         if (currentPage === 'employees') renderEmployees();
@@ -1331,6 +1354,10 @@
     let _dataLoaded = false;
     async function loadDataAsync() {
         if (_dataLoaded) return;
+        // Load from cache instantly for instant display
+        const hasCache = loadCache();
+        if (hasCache) refreshAll();
+        // Then fetch fresh data from Supabase
         await loadAllData();
         _dataLoaded = true;
         refreshAll();
@@ -1370,7 +1397,7 @@
         } else {
             hideApp();
             navigate('dashboard');
-            loadDataAsync();
+            // Don't preload — data loads on login to avoid race conditions
         }
 
         // ─── Login Form ───
