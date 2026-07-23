@@ -1,0 +1,19 @@
+{
+  "name": "EGESTOR 2.0 - Controlo Financeiro",
+  "short_name": "EGESTOR",
+  "description": "Controlo Financeiro Empresarial com gestão de fundos, funcionários e relatórios",
+  "start_url": "/egestor/index.html",
+  "display": "standalone",
+  "background_color": "#0a1628",
+  "theme_color": "#0a1628",
+  "orientation": "portrait-primary",
+  "scope": "/egestor/",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

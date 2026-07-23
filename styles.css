@@ -469,10 +469,25 @@ body.employee-role .nav-item[data-role="all"] { display: flex; }
     border: 1px solid var(--card-border);
     border-radius: var(--radius);
     padding: 24px;
+    padding-top: 20px;
     backdrop-filter: blur(12px);
     transition: all var(--transition);
     position: relative;
     overflow: hidden;
+}
+
+.fund-logo-box {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 16px;
+}
+
+.fund-logo-img {
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+    object-fit: cover;
+    border: 2px solid var(--card-border);
 }
 
 .fund-card::before {
@@ -976,6 +991,27 @@ body.employee-role .nav-item[data-role="all"] { display: flex; }
     justify-content: space-between;
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
+    gap: 10px;
+}
+
+.rule-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.rule-logo-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.rule-logo-preview {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
 }
 
 .sector-item:last-child,
@@ -1205,6 +1241,12 @@ body.employee-role .nav-item[data-role="all"] { display: flex; }
 }
 
 .report-stat-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.report-logo-img {
     width: 100%;
     height: 100%;
     object-fit: cover;

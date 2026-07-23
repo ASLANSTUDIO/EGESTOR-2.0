@@ -150,7 +150,7 @@
     }
 
     function mapRule(r) {
-        return { id: r.id, name: r.name, percentage: r.percentage, color: r.color };
+        return { id: r.id, name: r.name, percentage: r.percentage, color: r.color, logo: r.logo || null };
     }
 
     function mapTransaction(t) {
@@ -202,6 +202,7 @@
             sectorId: profile?.sector_id || null,
             employeeId: profile?.employee_id || null
         };
+        // Show app immediately, data loads in background
         showApp();
         return true;
     }
@@ -452,6 +453,16 @@
         refreshAll();
     }
 
+    async function updateRuleLogo(id, logo) {
+        const rule = rules.find(r => r.id === id);
+        if (!rule) return;
+        const { error } = await supabase.from('rules').update({ logo }).eq('id', id);
+        if (error) return showToast('Erro ao actualizar logótipo: ' + error.message, 'error');
+        rule.logo = logo;
+        refreshAll();
+        showToast('Logótipo actualizado.', 'success');
+    }
+
     async function recalculateTransactions() {
         for (const t of transactions) {
             const dist = distribute(t.amount);
@@ -549,6 +560,11 @@
         return r ? r.color : '#666';
     }
 
+    function getRuleLogo(id) {
+        const r = rules.find(r => r.id === id);
+        return r ? r.logo : null;
+    }
+
     // ─── Render: Dashboard ───
     function renderDashboard() {
         const { totalEntries, totalWithdrawals, netBalance, fundEntries, fundWithdrawals, fundNet, fundPct } = calcTotals();
@@ -571,9 +587,14 @@
             const pct = fundPct[r.id] || 0;
             const cls = fundClasses[i] || 'fund-pessoal';
             const icon = fundIcons[i] || 'sack-dollar';
+            const logo = getRuleLogo(r.id);
+            const logoHtml = logo
+                ? `<div class="fund-logo-box"><img src="${logo}" class="fund-logo-img"></div>`
+                : '';
 
             html += `
                 <div class="fund-card ${cls}">
+                    ${logoHtml}
                     <div class="fund-card-header">
                         <h3><i class="fas fa-${icon}"></i> ${r.name}</h3>
                         <span class="fund-percentage">${r.percentage}%</span>
@@ -904,7 +925,10 @@
         }).join('');
 
         const rulesList = $('#rulesList');
-        rulesList.innerHTML = rules.map(r => `
+        rulesList.innerHTML = rules.map(r => {
+            const logo = getRuleLogo(r.id);
+            const logoPreview = logo ? `<img src="${logo}" class="rule-logo-preview">` : '';
+            return `
             <div class="rule-item">
                 <div class="rule-info">
                     <span class="rule-color-dot" style="background:${r.color}"></span>
@@ -913,13 +937,19 @@
                         <span class="rule-percent">Percentual: <strong>${r.percentage}%</strong></span>
                     </div>
                 </div>
-                <div class="sector-actions">
+                <div class="rule-actions">
+                    <div class="rule-logo-box" id="ruleLogoBox_${r.id}">
+                        ${logoPreview}
+                        <button class="btn-secondary btn-sm" onclick="window.__editRuleLogo('${r.id}')" title="Alterar logótipo">
+                            <i class="fas fa-image"></i>
+                        </button>
+                    </div>
                     <input type="number" class="rule-percent-input" id="ruleInput_${r.id}"
                         value="${r.percentage}" min="0" max="100" step="0.5"
                         onchange="window.__updateRulePercent('${r.id}', this.value)">
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
 
         updateRulesValidation();
     }
@@ -1019,9 +1049,13 @@
                 const idx = rules.indexOf(r);
                 const repColor = repColors[idx] || '#666';
                 const repIcon = repIcons[idx] || 'sack-dollar';
+                const ruleLogo = getRuleLogo(r.id);
+                const repIconHtml = ruleLogo
+                    ? `<img src="${ruleLogo}" class="report-logo-img">`
+                    : `<i class="fas fa-${repIcon}"></i>`;
                 return `<div class="report-stat-item">
                     <div class="report-stat-left">
-                        <div class="report-stat-icon" style="background:${repColor}20;color:${repColor}"><i class="fas fa-${repIcon}"></i></div>
+                        <div class="report-stat-icon" style="background:${repColor}20;color:${repColor}">${repIconHtml}</div>
                         <span class="report-stat-name">${r.name}</span>
                     </div>
                     <div class="report-stat-values">
@@ -1095,55 +1129,16 @@
         if (!email) return showToast('Introduza o email.', 'error');
         if (!password || password.length < 3) return showToast('A palavra-passe deve ter no mínimo 3 caracteres.', 'error');
 
-        // Ask admin for their password to re-auth after signUp
-        const adminPass = prompt('Confirme a sua palavra-passe de admin para continuar:');
-        if (!adminPass) return;
-        const adminEmail = currentUser.email;
-
-        const { data, error } = await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-                data: { name: emp.name, role: 'employee', employee_id: emp.id, sector_id: emp.sectorId }
-            }
+        const { data, error } = await supabase.rpc('create_employee_user', {
+            p_email: email,
+            p_password: password,
+            p_name: emp.name,
+            p_employee_id: emp.id,
+            p_sector_id: emp.sectorId
         });
 
         if (error) return showToast('Erro ao criar acesso: ' + error.message, 'error');
-
-        // Update profile with employee_id and sector_id
-        if (data?.user) {
-            await supabase.from('profiles').update({
-                employee_id: emp.id,
-                sector_id: emp.sectorId
-            }).eq('id', data.user.id);
-        }
-
-        // Re-auth as admin immediately
-        const { error: loginErr } = await supabase.auth.signInWithPassword({
-            email: adminEmail,
-            password: adminPass
-        });
-
-        if (loginErr) {
-            showToast('Conta criada mas erro ao re-autenticar admin. Faça login novamente.', 'warning');
-            currentUser = null;
-            hideApp();
-            closeModal();
-            return;
-        }
-
-        // Reload session
-        const { data: { session } } = await supabase.auth.getSession();
-        supabaseSession = session;
-        const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-        currentUser = {
-            id: session.user.id,
-            email: session.user.email,
-            name: profile?.name || 'Administrador',
-            role: 'admin',
-            sectorId: null,
-            employeeId: null
-        };
+        if (data?.error) return showToast(data.error, 'error');
 
         closeModal();
         renderEmployees();
@@ -1280,6 +1275,45 @@
         updateRulePercent(id, val);
     };
 
+    window.__editRuleLogo = function (id) {
+        const rule = rules.find(r => r.id === id);
+        if (!rule) return;
+        const logoPreview = rule.logo ? `<div class="logo-preview"><img src="${rule.logo}" class="logo-preview-img"></div>` : '';
+        openModal('Logótipo — ' + rule.name,
+            '<div class="form-group"><label>Imagem do Logótipo</label><input type="file" id="modalRuleLogo" accept="image/*" style="font-size:0.85rem"><div id="ruleLogoPreviewArea" style="margin-top:8px">' + logoPreview + '</div><p class="form-hint">Faça upload de uma imagem (PNG, JPG) para representar este fundo</p></div>',
+            '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
+            '<button class="btn-primary" onclick="window.__saveRuleLogo(\'' + id + '\')">Guardar</button>');
+        setTimeout(() => {
+            const fileInput = $('#modalRuleLogo');
+            if (fileInput) {
+                fileInput.addEventListener('change', function () {
+                    const file = this.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function (e) {
+                        const area = $('#ruleLogoPreviewArea');
+                        area.innerHTML = `<div class="logo-preview"><img src="${e.target.result}" class="logo-preview-img"></div>`;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+        }, 50);
+    };
+
+    window.__saveRuleLogo = function (id) {
+        const preview = $('#ruleLogoPreviewArea');
+        const img = preview ? preview.querySelector('.logo-preview-img') : null;
+        const logo = img ? img.src : null;
+        updateRuleLogo(id, logo);
+        closeModal();
+    };
+
+    window.__removeRuleLogo = async function (id) {
+        if (!confirm('Remover logótipo deste fundo?')) return;
+        await updateRuleLogo(id, null);
+        closeModal();
+    };
+
     window.__closeModal = closeModal;
 
     // ─── Refresh ───
@@ -1294,6 +1328,14 @@
     }
 
     // ─── Init ───
+    let _dataLoaded = false;
+    async function loadDataAsync() {
+        if (_dataLoaded) return;
+        await loadAllData();
+        _dataLoaded = true;
+        refreshAll();
+    }
+
     async function init() {
         // Check existing Supabase session
         const { data: { session } } = await supabase.auth.getSession();
@@ -1305,7 +1347,6 @@
         });
 
         if (supabaseSession?.user) {
-            // Load user profile
             const { data: profile } = await supabase.from('profiles').select('*').eq('id', supabaseSession.user.id).single();
             currentUser = {
                 id: supabaseSession.user.id,
@@ -1322,20 +1363,34 @@
             weekday: 'long', day: '2-digit', month: 'long', year: 'numeric'
         });
 
-        // ─── Load all data from Supabase ───
-        await loadAllData();
+        // ─── Show UI immediately, load data in background ───
+        if (currentUser) {
+            showApp();
+            loadDataAsync();
+        } else {
+            hideApp();
+            navigate('dashboard');
+            loadDataAsync();
+        }
 
         // ─── Login Form ───
         $('#loginForm').addEventListener('submit', async function (e) {
             e.preventDefault();
+            const btn = this.querySelector('button[type="submit"]');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Entrando...';
             const email = $('#loginEmail').value.trim();
             const password = $('#loginPassword').value;
             const ok = await doLogin(email, password);
             if (ok) {
-                await loadAllData();
+                _dataLoaded = false;
+                await loadDataAsync();
                 showToast('Bem-vindo ao EGESTOR 2.0!', 'success');
             } else {
                 showToast('Email ou palavra-passe incorrectos.', 'error');
+                btn.disabled = false;
+                btn.innerHTML = originalText;
             }
         });
 

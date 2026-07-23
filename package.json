@@ -1,0 +1,36 @@
+{
+  "name": "egestor",
+  "version": "2.0.0",
+  "description": "EGESTOR - Controlo Financeiro Empresarial",
+  "main": "electron.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.egestor.app",
+    "productName": "EGESTOR",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron.js",
+      "index.html",
+      "styles.css",
+      "script.js",
+      "manifest.json",
+      "favicon.svg",
+      "sw.js"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "favicon.svg"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
