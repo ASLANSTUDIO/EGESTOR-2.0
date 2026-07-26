@@ -1,0 +1,1586 @@
+(function () {
+    'use strict';
+
+    // ─── Supabase Config ───
+    const SUPABASE_URL = 'https://bwwkftxdblxmioghjldu.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_U6N79tV3sToBI-iz_OXLAg_TSBR2VyI';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: {
+            autoRefreshToken: true,
+            persistSession: true,
+            detectSessionInUrl: false
+        }
+    });
+
+    // ─── Default Data ───
+    const SECTOR_ICONS = ['store','building','handshake','laptop-code','wrench','truck','headset','chart-line','file-invoice','gear','users-gear','scale-balanced','tree-city','industry','ship','plane','credit-card','globe','rocket','gem','graduation-cap','dumbbell','heart-pulse','leaf','cart-shopping','gavel','piggy-bank','sack-dollar','oil-well','car'];
+
+    const DEFAULT_SECTORS = [
+        { name: 'Vendas', color: '#1a8a5c', icon: 'store' },
+        { name: 'Serviços', color: '#d4a843', icon: 'wrench' },
+        { name: 'Consultoria', color: '#3498db', icon: 'handshake' },
+        { name: 'Produtos', color: '#9b59b6', icon: 'gem' },
+    ];
+
+    const DEFAULT_RULES = [
+        { name: 'Fundos Pessoal', percentage: 35, color: '#1a8a5c' },
+        { name: 'Fundos de Investimento', percentage: 30, color: '#d4a843' },
+        { name: 'Fundos de Caixa da Empresa', percentage: 35, color: '#3498db' },
+    ];
+
+    // ─── State ───
+    let transactions = [];
+    let withdrawals = [];
+    let sectors = [];
+    let rules = [];
+    let employees = [];
+    let salaryPayments = [];
+    let currentPage = 'dashboard';
+    let currentUser = null;
+    let supabaseSession = null;
+    let _adminCreds = null; // temp cache for grant-access re-auth
+
+    // ─── DOM refs ───
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => document.querySelectorAll(s);
+
+    // ─── Helpers ───
+    function fmt(n) {
+        return Number(n).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' Kz';
+    }
+
+    function fmtDate(d) {
+        const dt = new Date(d + 'T12:00:00');
+        return dt.toLocaleDateString('pt-AO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    }
+
+    function uuid() {
+        return crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    }
+
+    // ─── Toast ───
+    function showToast(message, type) {
+        type = type || 'success';
+        const container = $('#toastContainer');
+        const el = document.createElement('div');
+        el.className = 'toast ' + type;
+        const icons = { success: 'fa-circle-check', error: 'fa-circle-xmark', warning: 'fa-triangle-exclamation' };
+        el.innerHTML = '<i class="fas ' + (icons[type] || icons.success) + '"></i> ' + message;
+        container.appendChild(el);
+        setTimeout(() => {
+            el.style.opacity = '0';
+            el.style.transform = 'translateX(20px)';
+            el.style.transition = '0.3s';
+            setTimeout(() => el.remove(), 300);
+        }, 3000);
+    }
+
+    // ─── Modal ───
+    function openModal(title, bodyHTML, footerHTML) {
+        $('#modalTitle').textContent = title;
+        $('#modalBody').innerHTML = bodyHTML;
+        $('#modalFooter').innerHTML = footerHTML || '';
+        $('#modalOverlay').classList.add('active');
+    }
+
+    function closeModal() {
+        $('#modalOverlay').classList.remove('active');
+    }
+
+    // ─── Distribution Logic ───
+    function distribute(amount) {
+        return rules.map(r => ({
+            ...r,
+            allocated: (amount * r.percentage) / 100
+        }));
+    }
+
+    // ─── Online check ───
+    function isOnline() { return navigator.onLine; }
+
+    window.addEventListener('online', () => { showToast('Conexão restaurada. Dados sincronizados.', 'success'); syncToSupabase(); });
+    window.addEventListener('offline', () => showToast('Sem conexão. A trabalhar offline.', 'warning'));
+
+    // ─── Local Storage (fonte primária) ───
+    function saveLocal() {
+        try { localStorage.setItem('egestor_data', JSON.stringify({ transactions, withdrawals, sectors, rules, employees, salaryPayments })); } catch (_) {}
+    }
+
+    function loadLocal() {
+        try {
+            const saved = JSON.parse(localStorage.getItem('egestor_data'));
+            if (saved) {
+                sectors = (saved.sectors || []).map(s => ({ icon: 'building', logo: null, ...s }));
+                rules = (saved.rules || []).map(r => ({ logo: null, ...r }));
+                transactions = saved.transactions || [];
+                withdrawals = saved.withdrawals || [];
+                employees = saved.employees || [];
+                salaryPayments = saved.salaryPayments || [];
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    // ─── Supabase Sync (background) ───
+    function syncToSupabase() {
+        if (!isOnline() || !currentUser) return;
+        // Fire and forget — não bloqueia UI
+        (async () => {
+            try {
+                // Se local vazio e Supabase tem dados, puxar do servidor
+                const hasLocal = loadLocal();
+                if (!hasLocal || (sectors.length === 0 && rules.length === 0)) {
+                    const [sRes, rRes] = await Promise.all([
+                        supabase.from('sectors').select('*').order('created_at'),
+                        supabase.from('rules').select('*').order('created_at')
+                    ]);
+                    if (sRes.data?.length) sectors = sRes.data.map(mapSector);
+                    if (rRes.data?.length) rules = rRes.data.map(mapRule);
+                    if (currentUser) {
+                        const [tRes, wRes, eRes, pRes] = await Promise.all([
+                            supabase.from('transactions').select('*').order('created_at', { ascending: false }),
+                            supabase.from('withdrawals').select('*').order('created_at', { ascending: false }),
+                            supabase.from('employees').select('*').order('created_at'),
+                            supabase.from('salary_payments').select('*').order('created_at', { ascending: false })
+                        ]);
+                        if (tRes.data?.length) transactions = tRes.data.map(mapTransaction);
+                        if (wRes.data?.length) withdrawals = wRes.data.map(mapWithdrawal);
+                        if (eRes.data?.length) employees = eRes.data.map(mapEmployee);
+                        if (pRes.data?.length) salaryPayments = pRes.data.map(mapSalaryPayment);
+                    }
+                    saveLocal();
+                    refreshAll();
+                    return;
+                }
+
+                // Enviar dados locais para Supabase se estiverem mais atualizados
+                // (abordagem simplificada: substituir dados do servidor pelos locais)
+                if (!currentUser?.id) return;
+                const uid = currentUser.id;
+
+                // Upsert sectors e rules (dados de referência)
+                for (const s of sectors) {
+                    await supabase.from('sectors').upsert({ id: s.id, name: s.name, color: s.color, icon: s.icon || 'building', logo: s.logo }).eq('id', s.id).maybeSingle();
+                }
+                for (const r of rules) {
+                    await supabase.from('rules').upsert({ id: r.id, name: r.name, percentage: r.percentage, color: r.color, logo: r.logo }).eq('id', r.id).maybeSingle();
+                }
+
+                // Inserir transações locais no Supabase
+                for (const t of transactions) {
+                    await supabase.from('transactions').upsert({
+                        id: t.id, user_id: uid, date: t.date, amount: t.amount,
+                        sector_id: t.sectorId, description: t.description || '',
+                        distribution: t.distribution || []
+                    }).eq('id', t.id).maybeSingle();
+                }
+                for (const w of withdrawals) {
+                    await supabase.from('withdrawals').upsert({
+                        id: w.id, user_id: uid, date: w.date, amount: w.amount,
+                        fund_id: w.fundId, description: w.description || ''
+                    }).eq('id', w.id).maybeSingle();
+                }
+                for (const e of employees) {
+                    await supabase.from('employees').upsert({
+                        id: e.id, user_id: uid, name: e.name, salary: e.salary,
+                        fund_id: e.fundId, sector_id: e.sectorId
+                    }).eq('id', e.id).maybeSingle();
+                }
+                for (const p of salaryPayments) {
+                    await supabase.from('salary_payments').upsert({
+                        id: p.id, user_id: uid, employee_id: p.employeeId,
+                        date: p.date, amount: p.amount, fund_id: p.fundId,
+                        description: p.description || '', withdrawal_id: p.withdrawalId || null
+                    }).eq('id', p.id).maybeSingle();
+                }
+
+                // Auto-seed defaults se vazio
+                if (sectors.length === 0) {
+                    for (const s of DEFAULT_SECTORS) {
+                        const { data: nr } = await supabase.from('sectors').insert(s).select();
+                        if (nr?.[0]) sectors.push(mapSector(nr[0]));
+                    }
+                }
+                if (rules.length === 0) {
+                    for (const r of DEFAULT_RULES) {
+                        const { data: nr } = await supabase.from('rules').insert(r).select();
+                        if (nr?.[0]) rules.push(mapRule(nr[0]));
+                    }
+                }
+                saveLocal();
+                refreshAll();
+            } catch (_) { /* silent fail — offline */ }
+        })();
+    }
+
+    function mapSector(s) {
+        return { id: s.id, name: s.name, color: s.color, icon: s.icon || 'building', logo: s.logo || null };
+    }
+
+    function mapRule(r) {
+        return { id: r.id, name: r.name, percentage: r.percentage, color: r.color, logo: r.logo || null };
+    }
+
+    function mapTransaction(t) {
+        return {
+            id: t.id, type: 'entry', date: t.date, amount: t.amount,
+            sectorId: t.sector_id, description: t.description || '',
+            distribution: t.distribution || [],
+            createdAt: t.created_at, user_id: t.user_id
+        };
+    }
+
+    function mapWithdrawal(w) {
+        return {
+            id: w.id, type: 'withdraw', date: w.date, amount: w.amount,
+            fundId: w.fund_id, description: w.description || '',
+            createdAt: w.created_at, user_id: w.user_id
+        };
+    }
+
+    function mapEmployee(e) {
+        return {
+            id: e.id, name: e.name, salary: e.salary,
+            fundId: e.fund_id, sectorId: e.sector_id,
+            createdAt: e.created_at, user_id: e.user_id
+        };
+    }
+
+    function mapSalaryPayment(p) {
+        return {
+            id: p.id, employeeId: p.employee_id, date: p.date, amount: p.amount,
+            fundId: p.fund_id, description: p.description || '',
+            withdrawalId: p.withdrawal_id,
+            createdAt: p.created_at, user_id: p.user_id
+        };
+    }
+
+    // ─── Auth (local first, Supabase opcional) ───
+    function doLogin(email, password) {
+        // Admin hardcoded para funcionar offline
+        if (email !== 'admin@egestor.com' || password !== 'admin123') {
+            return false;
+        }
+        currentUser = { id: 'local-admin', email: 'admin@egestor.com', name: 'Administrador', role: 'admin', sectorId: null, employeeId: null };
+        showApp();
+        // Tentar login no Supabase em background (opcional)
+        if (isOnline()) {
+            supabase.auth.signInWithPassword({ email, password }).then(({ data, error }) => {
+                if (!error && data?.user) {
+                    supabaseSession = data.session;
+                    currentUser.id = data.user.id;
+                    supabase.from('profiles').select('*').eq('id', data.user.id).maybeSingle().then(({ data: profile }) => {
+                        if (profile) {
+                            currentUser.name = profile.name || currentUser.name;
+                            currentUser.role = profile.role || 'admin';
+                            currentUser.sectorId = profile.sector_id || null;
+                            currentUser.employeeId = profile.employee_id || null;
+                        }
+                        refreshAll();
+                    });
+                }
+            }).catch(() => {});
+        }
+        return true;
+    }
+
+    function doLogout() {
+        supabase.auth.signOut().catch(() => {});
+        currentUser = null;
+        supabaseSession = null;
+        _adminCreds = null;
+        hideApp();
+        showToast('Sessão terminada.', 'warning');
+    }
+
+    function isAdmin() { return currentUser && currentUser.role === 'admin'; }
+    function getEmployeeSectorId() { return currentUser && currentUser.role === 'employee' ? currentUser.sectorId : null; }
+
+    function showApp() {
+        $('#loginScreen').classList.add('hidden');
+        $('#appContainer').style.display = 'flex';
+        $('#userDisplayName').textContent = currentUser ? currentUser.name : 'Administrador';
+        $('#entryDate').valueAsDate = new Date();
+        $('#withdrawDate').valueAsDate = new Date();
+
+        const isAdm = isAdmin();
+        document.body.classList.toggle('employee-role', !isAdm);
+        const roleBadge = $('#roleBadge');
+        if (isAdm) {
+            roleBadge.textContent = 'Admin';
+            roleBadge.className = 'role-badge admin';
+            $('#userBadgeIcon').className = 'fas fa-user-tie';
+        } else {
+            roleBadge.textContent = 'Funcionário';
+            roleBadge.className = 'role-badge employee';
+            $('#userBadgeIcon').className = 'fas fa-user';
+        }
+
+        navigate(isAdm ? 'dashboard' : 'register');
+    }
+
+    function hideApp() {
+        $('#loginScreen').classList.remove('hidden');
+        $('#appContainer').style.display = 'none';
+        $('#loginEmail').value = '';
+        $('#loginPassword').value = '';
+    }
+
+    // ─── Navigation ───
+    function navigate(page) {
+        if (!isAdmin() && page !== 'register') page = 'register';
+        currentPage = page;
+        $$('.page').forEach(p => p.classList.remove('active'));
+        $$('.nav-item').forEach(n => n.classList.remove('active'));
+        const targetPage = $('#page-' + page);
+        if (targetPage) targetPage.classList.add('active');
+        const navItem = document.querySelector('.nav-item[data-page="' + page + '"]');
+        if (navItem) navItem.classList.add('active');
+
+        if (page === 'dashboard') renderDashboard();
+        if (page === 'register') { populateSectorSelect(); }
+        if (page === 'employees') { renderEmployees(); }
+        if (page === 'withdraw') { populateWithdrawFundSelect(); renderWithdrawHistory(); }
+        if (page === 'history') renderHistory();
+        if (page === 'reports') renderReports();
+        if (page === 'admin') renderAdmin();
+
+        $('#sidebar').classList.remove('open');
+    }
+
+    // ─── Helper: sync to Supabase (fire & forget) ───
+    function syncOp(op) {
+        if (!isOnline() || !currentUser) return;
+        op().catch(() => {});
+    }
+
+    // ─── CRUD: Entries ───
+    function addTransaction(data) {
+        const dist = distribute(data.amount);
+        const distData = dist.map(d => ({ ruleId: d.id, amount: d.allocated }));
+        const entry = { id: uuid(), type: 'entry', date: data.date, amount: data.amount, sectorId: data.sectorId, description: data.description || '', distribution: distData, createdAt: new Date().toISOString() };
+        transactions.unshift(entry);
+        saveLocal();
+        refreshAll();
+        showToast('Entrada registada com sucesso!', 'success');
+        syncOp(() => supabase.from('transactions').insert({ id: entry.id, user_id: currentUser.id, date: entry.date, amount: entry.amount, sector_id: entry.sectorId, description: entry.description, distribution: entry.distribution }));
+    }
+
+    function deleteTransaction(id) {
+        if (!confirm('Tem certeza que deseja eliminar esta entrada?')) return;
+        transactions = transactions.filter(t => t.id !== id);
+        saveLocal();
+        refreshAll();
+        showToast('Entrada eliminada.', 'warning');
+        syncOp(() => supabase.from('transactions').delete().eq('id', id));
+    }
+
+    // ─── CRUD: Withdrawals ───
+    function addWithdrawal(data) {
+        const entry = { id: uuid(), type: 'withdraw', date: data.date, amount: data.amount, fundId: data.fundId, description: data.description || '', createdAt: new Date().toISOString() };
+        withdrawals.unshift(entry);
+        saveLocal();
+        refreshAll();
+        showToast('Retirada de fundos efectuada com sucesso!', 'success');
+        syncOp(() => supabase.from('withdrawals').insert({ id: entry.id, user_id: currentUser.id, date: entry.date, amount: entry.amount, fund_id: entry.fundId, description: entry.description }));
+    }
+
+    function deleteWithdrawal(id) {
+        if (!confirm('Tem certeza que deseja eliminar esta retirada?')) return;
+        withdrawals = withdrawals.filter(w => w.id !== id);
+        saveLocal();
+        refreshAll();
+        showToast('Retirada eliminada.', 'warning');
+        syncOp(() => supabase.from('withdrawals').delete().eq('id', id));
+    }
+
+    // ─── CRUD: Employees ───
+    function addEmployee(data) {
+        const emp = { id: uuid(), name: data.name, salary: data.salary, fundId: data.fundId, sectorId: data.sectorId || data.fundId };
+        employees.push(emp);
+        saveLocal();
+        refreshAll();
+        showToast('Funcionário cadastrado com sucesso!', 'success');
+        syncOp(() => supabase.from('employees').insert({ id: emp.id, user_id: currentUser.id, name: emp.name, salary: emp.salary, fund_id: emp.fundId, sector_id: emp.sectorId }));
+    }
+
+    function deleteEmployee(id) {
+        if (salaryPayments.some(p => p.employeeId === id)) return showToast('Não pode eliminar um funcionário com pagamentos registados.', 'error');
+        if (!confirm('Tem certeza que deseja eliminar este funcionário?')) return;
+        employees = employees.filter(e => e.id !== id);
+        saveLocal();
+        refreshAll();
+        showToast('Funcionário removido.', 'warning');
+        syncOp(() => supabase.from('employees').delete().eq('id', id));
+    }
+
+    function paySalary(employeeId, date) {
+        const emp = employees.find(e => e.id === employeeId);
+        if (!emp) return showToast('Funcionário não encontrado.', 'error');
+        const balance = getFundBalance(emp.fundId);
+        if (emp.salary > balance) return showToast('Saldo insuficiente no fundo ' + getRuleName(emp.fundId) + ' para pagar este salário.', 'error');
+        const withdrawalId = uuid();
+        const paymentId = uuid();
+        const withdrawal = { id: withdrawalId, type: 'withdraw', date, amount: emp.salary, fundId: emp.fundId, description: 'Salário: ' + emp.name, createdAt: new Date().toISOString() };
+        const payment = { id: paymentId, employeeId: emp.id, date, amount: emp.salary, fundId: emp.fundId, withdrawalId, description: 'Salário: ' + emp.name, createdAt: new Date().toISOString() };
+        withdrawals.unshift(withdrawal);
+        salaryPayments.unshift(payment);
+        saveLocal();
+        refreshAll();
+        showToast('Salário de ' + emp.name + ' pago com sucesso! (Debitado de ' + getRuleName(emp.fundId) + ')', 'success');
+        syncOp(async () => {
+            await supabase.from('withdrawals').insert({ id: withdrawalId, user_id: currentUser.id, date, amount: emp.salary, fund_id: emp.fundId, description: 'Salário: ' + emp.name });
+            await supabase.from('salary_payments').insert({ id: paymentId, user_id: currentUser.id, employee_id: emp.id, date, amount: emp.salary, fund_id: emp.fundId, withdrawal_id: withdrawalId, description: 'Salário: ' + emp.name });
+        });
+    }
+
+    function deleteSalaryPayment(id) {
+        if (!confirm('Tem certeza que deseja eliminar este pagamento?')) return;
+        const payment = salaryPayments.find(p => p.id === id);
+        if (payment) withdrawals = withdrawals.filter(w => w.id !== payment.withdrawalId);
+        salaryPayments = salaryPayments.filter(p => p.id !== id);
+        saveLocal();
+        refreshAll();
+        showToast('Pagamento eliminado.', 'warning');
+        syncOp(async () => {
+            if (payment) await supabase.from('withdrawals').delete().eq('id', payment.withdrawalId);
+            await supabase.from('salary_payments').delete().eq('id', id);
+        });
+    }
+
+    // ─── CRUD: Sectors ───
+    function addSector(name, logo) {
+        if (sectors.some(s => s.name.toLowerCase() === name.toLowerCase())) return showToast('Já existe um sector com este nome.', 'error');
+        const colors = ['#1a8a5c','#d4a843','#3498db','#9b59b6','#e74c3c','#f39c12','#2ecc71','#1abc9c','#e67e22','#2980b9'];
+        const sector = { id: uuid(), name, color: colors[sectors.length % colors.length], icon: logo ? 'image' : 'building', logo: logo || null };
+        sectors.push(sector);
+        saveLocal();
+        refreshAll();
+        showToast('Sector adicionado com sucesso!', 'success');
+        syncOp(() => supabase.from('sectors').insert({ id: sector.id, name: sector.name, color: sector.color, icon: sector.icon, logo: sector.logo }));
+    }
+
+    function updateSector(id, name, logo) {
+        const sector = sectors.find(s => s.id === id);
+        if (!sector) return;
+        sector.name = name;
+        sector.icon = logo ? 'image' : (sector.icon !== 'image' ? sector.icon : 'building');
+        sector.logo = logo || null;
+        saveLocal();
+        refreshAll();
+        showToast('Sector actualizado.', 'success');
+        syncOp(() => supabase.from('sectors').update({ name, icon: sector.icon, logo: sector.logo }).eq('id', id));
+    }
+
+    function deleteSectorDB(id) {
+        if (transactions.some(t => t.sectorId === id)) return showToast('Não pode eliminar um sector com entradas associadas.', 'error');
+        if (sectors.length <= 1) return showToast('É necessário ter pelo menos um sector.', 'error');
+        if (!confirm('Tem certeza que deseja eliminar este sector?')) return;
+        sectors = sectors.filter(s => s.id !== id);
+        saveLocal();
+        refreshAll();
+        showToast('Sector eliminado.', 'warning');
+        syncOp(() => supabase.from('sectors').delete().eq('id', id));
+    }
+
+    // ─── CRUD: Rules ───
+    function updateRulePercent(id, percentage) {
+        const num = parseFloat(percentage);
+        if (isNaN(num) || num < 0 || num > 100) { showToast('O percentual deve estar entre 0 e 100.', 'error'); renderAdmin(); return; }
+        const rule = rules.find(r => r.id === id);
+        if (rule) rule.percentage = num;
+        updateRulesValidation();
+        recalculateTransactions();
+        refreshAll();
+        syncOp(() => supabase.from('rules').update({ percentage: num }).eq('id', id));
+    }
+
+    function updateRuleLogo(id, logo) {
+        const rule = rules.find(r => r.id === id);
+        if (!rule) return;
+        rule.logo = logo;
+        saveLocal();
+        refreshAll();
+        showToast('Logótipo actualizado.', 'success');
+        syncOp(() => supabase.from('rules').update({ logo }).eq('id', id));
+    }
+
+    function recalculateTransactions() {
+        transactions.forEach(t => {
+            const dist = distribute(t.amount);
+            t.distribution = dist.map(d => ({ ruleId: d.id, amount: d.allocated }));
+        });
+        saveLocal();
+    }
+
+    // ─── Employee App Access ───
+    async function getEmployeeAppAccess(employeeId) {
+        const { data } = await supabase
+            .from('profiles')
+            .select('id, name, email, employee_id, sector_id')
+            .eq('employee_id', employeeId)
+            .maybeSingle();
+
+        // Also join with auth.users email
+        if (data) {
+            const { data: authUser } = await supabase.auth.admin.getUserById(data.id);
+            // admin.getUserById needs service_role — fallback: use profiles name
+            return { id: data.id, email: data.id + '@employee.local', name: data.name, employeeId: data.employee_id, sectorId: data.sector_id };
+        }
+        return null;
+    }
+
+    function findEmployeeAccess(employeeId) {
+        // Synchronous check from loaded profiles cache
+        return null; // will be checked async when rendering
+    }
+
+    // ─── Calculated Totals ───
+    function calcTotals() {
+        const totalEntries = transactions.reduce((s, t) => s + t.amount, 0);
+        const totalWithdrawals = withdrawals.reduce((s, w) => s + w.amount, 0);
+        const netBalance = totalEntries - totalWithdrawals;
+
+        const fundEntries = {};
+        const fundWithdrawals = {};
+        rules.forEach(r => { fundEntries[r.id] = 0; fundWithdrawals[r.id] = 0; });
+
+        transactions.forEach(t => {
+            t.distribution.forEach(d => {
+                if (fundEntries[d.ruleId] !== undefined) fundEntries[d.ruleId] += d.amount;
+            });
+        });
+
+        withdrawals.forEach(w => {
+            if (fundWithdrawals[w.fundId] !== undefined) fundWithdrawals[w.fundId] += w.amount;
+        });
+
+        const fundNet = {};
+        const fundPct = {};
+        const totalFundEntries = Object.values(fundEntries).reduce((s, v) => s + v, 0);
+        rules.forEach(r => {
+            fundNet[r.id] = (fundEntries[r.id] || 0) - (fundWithdrawals[r.id] || 0);
+            fundPct[r.id] = totalFundEntries > 0 ? ((fundEntries[r.id] || 0) / totalFundEntries) * 100 : 0;
+        });
+
+        return { totalEntries, totalWithdrawals, netBalance, fundEntries, fundWithdrawals, fundNet, fundPct };
+    }
+
+    function getFundBalance(fundId) {
+        const { fundEntries, fundWithdrawals } = calcTotals();
+        return (fundEntries[fundId] || 0) - (fundWithdrawals[fundId] || 0);
+    }
+
+    function getSectorName(id) {
+        const s = sectors.find(s => s.id === id);
+        return s ? s.name : 'Desconhecido';
+    }
+
+    function getSectorColor(id) {
+        const s = sectors.find(s => s.id === id);
+        return s ? s.color : '#666';
+    }
+
+    function getSectorIcon(id) {
+        const s = sectors.find(s => s.id === id);
+        return s && s.icon ? s.icon : 'building';
+    }
+
+    function getSectorLogo(id) {
+        const s = sectors.find(s => s.id === id);
+        return s ? s.logo : null;
+    }
+
+    function getRuleName(id) {
+        const r = rules.find(r => r.id === id);
+        return r ? r.name : 'Desconhecido';
+    }
+
+    function getRuleColor(id) {
+        const r = rules.find(r => r.id === id);
+        return r ? r.color : '#666';
+    }
+
+    function getRuleLogo(id) {
+        const r = rules.find(r => r.id === id);
+        return r ? r.logo : null;
+    }
+
+    // ─── Render: Dashboard ───
+    function renderDashboard() {
+        const { totalEntries, totalWithdrawals, netBalance, fundEntries, fundWithdrawals, fundNet, fundPct } = calcTotals();
+
+        $('#totalEntries').textContent = fmt(totalEntries);
+        $('#totalWithdrawals').textContent = fmt(totalWithdrawals);
+        const netEl = $('#netBalance');
+        netEl.textContent = fmt(Math.abs(netBalance));
+        netEl.className = 'card-value' + (netBalance < 0 ? ' negative' : '');
+
+        const grid = $('#fundsGrid');
+        const fundClasses = ['fund-pessoal', 'fund-investimento', 'fund-caixa'];
+        const fundIcons = ['users', 'chart-line', 'building-columns'];
+
+        let html = '';
+        rules.forEach((r, i) => {
+            const entryAmt = fundEntries[r.id] || 0;
+            const withdrawalAmt = fundWithdrawals[r.id] || 0;
+            const netAmt = fundNet[r.id] || 0;
+            const pct = fundPct[r.id] || 0;
+            const cls = fundClasses[i] || 'fund-pessoal';
+            const icon = fundIcons[i] || 'sack-dollar';
+            const logo = getRuleLogo(r.id);
+            const logoHtml = logo
+                ? `<div class="fund-logo-box"><img src="${logo}" class="fund-logo-img"></div>`
+                : '';
+
+            html += `
+                <div class="fund-card ${cls}">
+                    ${logoHtml}
+                    <div class="fund-card-header">
+                        <h3><i class="fas fa-${icon}"></i> ${r.name}</h3>
+                        <span class="fund-percentage">${r.percentage}%</span>
+                    </div>
+                    <div class="fund-amount">${fmt(netAmt)}</div>
+                    <div class="fund-sub-amount">
+                        <span class="positive">+${fmt(entryAmt)}</span>
+                        <span class="negative">-${fmt(withdrawalAmt)}</span>
+                    </div>
+                    <div class="fund-progress">
+                        <div class="fund-progress-bar" style="width:${Math.min(pct, 100)}%"></div>
+                    </div>
+                </div>
+            `;
+        });
+        grid.innerHTML = html;
+
+        const container = $('#recentTransactions');
+        const allMovements = [
+            ...transactions.map(t => ({ ...t, _label: t.sectorId, _tag: getSectorName(t.sectorId), _icon: getSectorIcon(t.sectorId), _logo: getSectorLogo(t.sectorId) })),
+            ...withdrawals.map(w => ({ ...w, _label: w.fundId, _tag: (w.description && w.description.startsWith('Salário:') ? '💰 ' : '') + getRuleName(w.fundId), _icon: null, _logo: null })),
+            ...salaryPayments.map(p => {
+                const emp = employees.find(e => e.id === p.employeeId);
+                return {
+                    date: p.date,
+                    amount: p.amount,
+                    type: 'salary',
+                    createdAt: p.createdAt,
+                    _tag: 'Salário: ' + (emp ? emp.name : '?'),
+                    _icon: null,
+                    _fundId: p.fundId
+                };
+            })
+        ].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 8);
+
+        if (allMovements.length === 0) {
+            container.innerHTML = '<p class="empty-state">Nenhuma movimentação registada</p>';
+        } else {
+            container.innerHTML = allMovements.map(m => {
+                const isEntry = m.type === 'entry';
+                const isSalary = m.type === 'salary';
+                let icon;
+                if (isEntry && m._logo) {
+                    icon = `<img src="${m._logo}" class="recent-logo-img">`;
+                } else if (isEntry && m._icon) {
+                    icon = `<i class="fas fa-${m._icon}"></i>`;
+                } else {
+                    icon = `<i class="fas fa-${isEntry ? 'arrow-down' : isSalary ? 'money-bill' : 'arrow-up'}"></i>`;
+                }
+                const sign = isEntry ? '+' : '-';
+                const cls = isEntry ? 'entry' : 'withdraw';
+                return `
+                    <div class="recent-item">
+                        <div class="recent-item-left">
+                            <div class="recent-item-icon ${cls}">${icon}</div>
+                            <div class="recent-item-info">
+                                <span class="recent-item-amount ${cls}">${sign}${fmt(m.amount)}</span>
+                                <span class="recent-item-date">${fmtDate(m.date)} — ${m._tag}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+    }
+
+    // ─── Render: Register ───
+    function populateSectorSelect() {
+        const sel = $('#entrySector');
+        const empSectorId = getEmployeeSectorId();
+
+        if (empSectorId) {
+            const sector = sectors.find(s => s.id === empSectorId);
+            sel.innerHTML = sector ? `<option value="${sector.id}">${sector.name}</option>` : '';
+            sel.disabled = true;
+            const sectorGroup = sel.closest('.form-group');
+            if (sectorGroup) {
+                const label = sectorGroup.querySelector('label');
+                if (label) label.innerHTML = '<i class="fas fa-building"></i> Sector (atribuído)';
+            }
+        } else {
+            sel.disabled = false;
+            const currentVal = sel.value;
+            sel.innerHTML = sectors.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            const exists = sectors.some(s => s.id === currentVal);
+            if (currentVal && exists) sel.value = currentVal;
+            const sectorGroup = sel.closest('.form-group');
+            if (sectorGroup) {
+                const label = sectorGroup.querySelector('label');
+                if (label) label.innerHTML = '<i class="fas fa-building"></i> Sector de Entrada';
+            }
+        }
+    }
+
+    function getRegisterSectorId() {
+        const empSectorId = getEmployeeSectorId();
+        if (empSectorId) return empSectorId;
+        return $('#entrySector').value;
+    }
+
+    function updateDistributionPreview(amount) {
+        const preview = $('#distributionPreview');
+        if (!amount || amount <= 0) { preview.style.display = 'none'; return; }
+        preview.style.display = 'block';
+        const dist = distribute(amount);
+        const bars = $('#distributionBars');
+        const distColors = ['green', 'gold', 'blue'];
+        bars.innerHTML = dist.map((d, i) => `
+            <div class="dist-item">
+                <div class="dist-header">
+                    <span class="dist-name">${d.name}</span>
+                    <span class="dist-values">
+                        <span class="dist-percent">${d.percentage}%</span>
+                        <span class="dist-amount">${fmt(d.allocated)}</span>
+                    </span>
+                </div>
+                <div class="dist-bar">
+                    <div class="dist-fill ${distColors[i] || 'blue'}" style="width:${d.percentage}%"></div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // ─── Render: Withdraw ───
+    function populateWithdrawFundSelect() {
+        const sel = $('#withdrawFund');
+        const currentVal = sel.value;
+        sel.innerHTML = rules.map(r => `<option value="${r.id}">${r.name} (${r.percentage}%)</option>`).join('');
+        const exists = rules.some(r => r.id === currentVal);
+        if (currentVal && exists) sel.value = currentVal;
+        updateFundBalanceDisplay();
+    }
+
+    function updateFundBalanceDisplay() {
+        const fundId = $('#withdrawFund').value;
+        if (!fundId) return;
+        const balance = getFundBalance(fundId);
+        $('#fundBalanceDisplay').textContent = fmt(balance);
+    }
+
+    function renderWithdrawHistory() {
+        const body = $('#withdrawHistoryBody');
+        if (withdrawals.length === 0) {
+            body.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhuma retirada registada</td></tr>';
+            return;
+        }
+        body.innerHTML = withdrawals.map(w => `
+            <tr>
+                <td>${fmtDate(w.date)}</td>
+                <td class="amount-negative">-${fmt(w.amount)}</td>
+                <td>${getRuleName(w.fundId)}</td>
+                <td>${w.description || '—'}</td>
+                <td>
+                    <button class="btn-danger" style="padding:5px 10px;font-size:0.75rem" onclick="window.__deleteWithdrawal('${w.id}')">
+                        <i class="fas fa-trash-can"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    // ─── Render: Employees ───
+    function renderEmployees() {
+        const fundSel = $('#empFund');
+        fundSel.innerHTML = rules.map(r => `<option value="${r.id}">${r.name} (${r.percentage}%)</option>`).join('');
+
+        const sectorSel = $('#empSector');
+        sectorSel.innerHTML = sectors.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+
+        const list = $('#employeeList');
+        if (employees.length === 0) {
+            list.innerHTML = '<div class="emp-empty"><i class="fas fa-users-slash"></i><p>Nenhum funcionário cadastrado.</p></div>';
+        } else {
+            list.innerHTML = employees.map(e => {
+                const color = getRuleColor(e.fundId);
+                const initials = e.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+                const sectorName = getSectorName(e.sectorId);
+                return `
+                    <div class="emp-card">
+                        <div class="emp-card-left">
+                            <div class="emp-avatar" style="background:${color}30;color:${color}">${initials}</div>
+                            <div class="emp-info">
+                                <span class="emp-name">${e.name}</span>
+                                <span class="emp-salary">Salário: ${fmt(e.salary)}</span>
+                                <span class="emp-fund-tag"><i class="fas fa-piggy-bank"></i> Débito: ${getRuleName(e.fundId)}</span>
+                                <span class="emp-fund-tag"><i class="fas fa-building"></i> Sector: ${sectorName}</span>
+                            </div>
+                        </div>
+                        <div class="emp-card-actions">
+                            <button class="btn-primary btn-sm" onclick="window.__paySalary('${e.id}')">
+                                <i class="fas fa-check"></i> Pagar
+                            </button>
+                            <button class="btn-secondary btn-sm" onclick="window.__grantAppAccess('${e.id}')">
+                                <i class="fas fa-mobile-screen-button"></i> Dar Acesso
+                            </button>
+                            <button class="btn-danger" style="padding:5px 10px;font-size:0.75rem" onclick="window.__deleteEmployee('${e.id}')">
+                                <i class="fas fa-trash-can"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        renderSalaryPaymentHistory();
+    }
+
+    function renderSalaryPaymentHistory() {
+        const body = $('#salaryPaymentBody');
+        if (salaryPayments.length === 0) {
+            body.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhum pagamento registado</td></tr>';
+            return;
+        }
+        body.innerHTML = salaryPayments.map(p => {
+            const emp = employees.find(e => e.id === p.employeeId);
+            const empName = emp ? emp.name : 'Desconhecido';
+            return `
+                <tr>
+                    <td>${fmtDate(p.date)}</td>
+                    <td>${empName}</td>
+                    <td class="amount-negative">-${fmt(p.amount)}</td>
+                    <td>${getRuleName(p.fundId)}</td>
+                    <td>
+                        <button class="btn-danger" style="padding:5px 10px;font-size:0.75rem" onclick="window.__deleteSalaryPayment('${p.id}')">
+                            <i class="fas fa-trash-can"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // ─── Render: History ───
+    function renderHistory() {
+        const filterDate = $('#filterDate').value;
+        const filterSector = $('#filterSector').value;
+        const filterType = $('#filterType').value;
+
+        const sel = $('#filterSector');
+        const currVal = sel.value;
+        sel.innerHTML = '<option value="">Todos os Sectores/Fundos</option>' +
+            sectors.map(s => `<option value="s_${s.id}">${s.name} (Entrada)</option>`).join('') +
+            rules.map(r => `<option value="r_${r.id}">${r.name} (Retirada)</option>`).join('');
+        sel.value = currVal;
+
+        let allItems = [
+            ...transactions.map(t => ({ ...t, _filterSector: 's_' + t.sectorId })),
+            ...withdrawals.map(w => ({ ...w, _filterSector: 'r_' + w.fundId }))
+        ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        if (filterDate) allItems = allItems.filter(m => m.date === filterDate);
+        if (filterSector) allItems = allItems.filter(m => m._filterSector === filterSector);
+        if (filterType) allItems = allItems.filter(m => m.type === filterType);
+
+        const body = $('#historyBody');
+        if (allItems.length === 0) {
+            body.innerHTML = '<tr><td colspan="9" class="empty-state">Nenhuma movimentação encontrada</td></tr>';
+            return;
+        }
+
+        body.innerHTML = allItems.map(m => {
+            if (m.type === 'entry') {
+                const distMap = {};
+                m.distribution.forEach(d => {
+                    const rule = rules.find(r => r.id === d.ruleId);
+                    if (rule) distMap[rule.id] = { name: rule.name, amount: d.amount };
+                });
+                const r1 = rules[0] ? (distMap[rules[0].id] ? fmt(distMap[rules[0].id].amount) : '0,00 Kz') : '';
+                const r2 = rules[1] ? (distMap[rules[1].id] ? fmt(distMap[rules[1].id].amount) : '0,00 Kz') : '';
+                const r3 = rules[2] ? (distMap[rules[2].id] ? fmt(distMap[rules[2].id].amount) : '0,00 Kz') : '';
+                return `
+                    <tr>
+                        <td>${fmtDate(m.date)}</td>
+                        <td><span class="type-badge entry"><i class="fas fa-plus"></i> Entrada</span></td>
+                        <td class="amount-positive">${fmt(m.amount)}</td>
+                        <td>${getSectorName(m.sectorId)}</td>
+                        <td>${m.description || '—'}</td>
+                        <td>${r1}</td>
+                        <td>${r2}</td>
+                        <td>${r3}</td>
+                        <td>
+                            <button class="btn-danger" style="padding:5px 10px;font-size:0.75rem" onclick="window.__deleteTransaction('${m.id}')">
+                                <i class="fas fa-trash-can"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            } else {
+                return `
+                    <tr>
+                        <td>${fmtDate(m.date)}</td>
+                        <td><span class="type-badge withdraw"><i class="fas fa-minus"></i> Retirada</span></td>
+                        <td class="amount-negative">-${fmt(m.amount)}</td>
+                        <td>${getRuleName(m.fundId)}</td>
+                        <td>${m.description || '—'}</td>
+                        <td>—</td>
+                        <td>—</td>
+                        <td>—</td>
+                        <td>
+                            <button class="btn-danger" style="padding:5px 10px;font-size:0.75rem" onclick="window.__deleteWithdrawal('${m.id}')">
+                                <i class="fas fa-trash-can"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }
+        }).join('');
+    }
+
+    // ─── Render: Admin ───
+    function renderAdmin() {
+        const list = $('#sectorsList');
+        list.innerHTML = sectors.map(s => {
+            const logoHtml = s.logo
+                ? `<img src="${s.logo}" class="sector-logo-img" alt="${s.name}">`
+                : `<i class="fas fa-${s.icon || 'building'}"></i>`;
+            return `
+            <div class="sector-item">
+                <div class="sector-info">
+                    <span class="sector-color" style="background:${s.color}">${logoHtml}</span>
+                    <span class="sector-name">${s.name}</span>
+                </div>
+                <div class="sector-actions">
+                    <button class="btn-secondary btn-sm" onclick="window.__editSector('${s.id}')"><i class="fas fa-pen"></i></button>
+                    <button class="btn-danger" style="padding:5px 10px;font-size:0.75rem" onclick="window.__deleteSector('${s.id}')"><i class="fas fa-trash-can"></i></button>
+                </div>
+            </div>`;
+        }).join('');
+
+        const rulesList = $('#rulesList');
+        rulesList.innerHTML = rules.map(r => {
+            const logo = getRuleLogo(r.id);
+            const logoPreview = logo ? `<img src="${logo}" class="rule-logo-preview">` : '';
+            return `
+            <div class="rule-item">
+                <div class="rule-info">
+                    <span class="rule-color-dot" style="background:${r.color}"></span>
+                    <div class="rule-details">
+                        <span class="rule-name">${r.name}</span>
+                        <span class="rule-percent">Percentual: <strong>${r.percentage}%</strong></span>
+                    </div>
+                </div>
+                <div class="rule-actions">
+                    <div class="rule-logo-box" id="ruleLogoBox_${r.id}">
+                        ${logoPreview}
+                        <button class="btn-secondary btn-sm" onclick="window.__editRuleLogo('${r.id}')" title="Alterar logótipo">
+                            <i class="fas fa-image"></i>
+                        </button>
+                    </div>
+                    <input type="number" class="rule-percent-input" id="ruleInput_${r.id}"
+                        value="${r.percentage}" min="0" max="100" step="0.5"
+                        onchange="window.__updateRulePercent('${r.id}', this.value)">
+                </div>
+            </div>`;
+        }).join('');
+
+        updateRulesValidation();
+    }
+
+    function updateRulesValidation() {
+        const total = rules.reduce((s, r) => s + r.percentage, 0);
+        const el = $('#rulesValidation');
+        el.innerHTML = total === 100
+            ? '<i class="fas fa-circle-check"></i> Total: <span id="rulesTotal">' + total + '</span>% — Válido'
+            : '<i class="fas fa-circle-exclamation"></i> Total: <span id="rulesTotal">' + total + '</span>% — Deve ser exatamente 100%';
+        el.classList.toggle('invalid', total !== 100);
+    }
+
+    // ─── Render: Reports ───
+    function renderReports() {
+        const period = $('#reportPeriod').value;
+        const dateVal = $('#reportDate').value;
+        const monthVal = $('#reportMonth').value;
+        const yearVal = $('#reportYear').value;
+
+        $('#reportDate').style.display = period === 'day' ? '' : 'none';
+        $('#reportMonth').style.display = period === 'month' ? '' : 'none';
+        $('#reportYear').style.display = period === 'year' ? '' : 'none';
+
+        let filterFn;
+        if (period === 'day' && dateVal) {
+            filterFn = (m) => m.date === dateVal;
+        } else if (period === 'month' && monthVal) {
+            filterFn = (m) => m.date && m.date.startsWith(monthVal);
+        } else if (period === 'year' && yearVal) {
+            filterFn = (m) => m.date && m.date.startsWith(String(yearVal));
+        } else {
+            filterFn = () => true;
+        }
+
+        const filteredEntries = transactions.filter(filterFn);
+        const filteredWithdrawals = withdrawals.filter(filterFn);
+
+        const totalEntries = filteredEntries.reduce((s, t) => s + t.amount, 0);
+        const totalWithdrawals = filteredWithdrawals.reduce((s, w) => s + w.amount, 0);
+        const netBalance = totalEntries - totalWithdrawals;
+        const totalMov = filteredEntries.length + filteredWithdrawals.length;
+
+        $('#repTotalEntries').textContent = fmt(totalEntries);
+        $('#repTotalWithdrawals').textContent = fmt(totalWithdrawals);
+        $('#repNetBalance').textContent = fmt(Math.abs(netBalance));
+        $('#repNetBalance').style.color = netBalance < 0 ? 'var(--danger)' : '';
+        $('#repTotalMov').textContent = totalMov;
+
+        const sectorTotals = {};
+        filteredEntries.forEach(t => {
+            if (!sectorTotals[t.sectorId]) sectorTotals[t.sectorId] = 0;
+            sectorTotals[t.sectorId] += t.amount;
+        });
+        const sectorHtml = Object.keys(sectorTotals).length === 0
+            ? '<p class="empty-state">Nenhuma entrada no período</p>'
+            : Object.entries(sectorTotals).sort((a, b) => b[1] - a[1]).map(([sid, amt]) => {
+                const pct = totalEntries > 0 ? (amt / totalEntries) * 100 : 0;
+                const logo = getSectorLogo(sid);
+                const iconHtml = logo
+                    ? `<img src="${logo}" class="report-logo-img">`
+                    : `<i class="fas fa-${getSectorIcon(sid)}"></i>`;
+                return `<div class="report-stat-item">
+                    <div class="report-stat-left">
+                        <div class="report-stat-icon" style="background:${getSectorColor(sid)}20;color:${getSectorColor(sid)}">${iconHtml}</div>
+                        <span class="report-stat-name">${getSectorName(sid)}</span>
+                    </div>
+                    <div class="report-stat-values">
+                        <div class="report-stat-amount">${fmt(amt)}</div>
+                        <div class="report-stat-pct">${pct.toFixed(1)}%</div>
+                    </div>
+                </div>`;
+            }).join('');
+        $('#reportSectors').innerHTML = sectorHtml;
+
+        const fundTotals = {};
+        rules.forEach(r => fundTotals[r.id] = 0);
+        filteredEntries.forEach(t => {
+            t.distribution.forEach(d => {
+                if (fundTotals[d.ruleId] !== undefined) fundTotals[d.ruleId] += d.amount;
+            });
+        });
+        const fundWithdraw = {};
+        rules.forEach(r => fundWithdraw[r.id] = 0);
+        filteredWithdrawals.forEach(w => {
+            if (fundWithdraw[w.fundId] !== undefined) fundWithdraw[w.fundId] += w.amount;
+        });
+        const fundHtml = rules.length === 0
+            ? '<p class="empty-state">Nenhuma regra de distribuição</p>'
+            : rules.map(r => {
+                const entryAmt = fundTotals[r.id] || 0;
+                const withdrawAmt = fundWithdraw[r.id] || 0;
+                const netAmt = entryAmt - withdrawAmt;
+                const pct = totalEntries > 0 ? (entryAmt / totalEntries) * 100 : 0;
+                const repColors = ['#1a8a5c', '#d4a843', '#3498db'];
+                const repIcons = ['users', 'chart-line', 'building-columns'];
+                const idx = rules.indexOf(r);
+                const repColor = repColors[idx] || '#666';
+                const repIcon = repIcons[idx] || 'sack-dollar';
+                const ruleLogo = getRuleLogo(r.id);
+                const repIconHtml = ruleLogo
+                    ? `<img src="${ruleLogo}" class="report-logo-img">`
+                    : `<i class="fas fa-${repIcon}"></i>`;
+                return `<div class="report-stat-item">
+                    <div class="report-stat-left">
+                        <div class="report-stat-icon" style="background:${repColor}20;color:${repColor}">${repIconHtml}</div>
+                        <span class="report-stat-name">${r.name}</span>
+                    </div>
+                    <div class="report-stat-values">
+                        <div class="report-stat-amount" style="color:${netAmt >= 0 ? 'var(--accent)' : 'var(--danger)'}">${fmt(netAmt)}</div>
+                        <div class="report-stat-pct">+${fmt(entryAmt)} / -${fmt(withdrawAmt)}</div>
+                    </div>
+                </div>`;
+            }).join('');
+        $('#reportFunds').innerHTML = fundHtml;
+
+        const allMov = [
+            ...filteredEntries.map(t => ({ ...t, _tag: getSectorName(t.sectorId) })),
+            ...filteredWithdrawals.map(w => ({ ...w, _tag: getRuleName(w.fundId) }))
+        ].sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+
+        const movBody = $('#reportMovements');
+        if (allMov.length === 0) {
+            movBody.innerHTML = '<p class="empty-state">Nenhuma movimentação no período</p>';
+        } else {
+            movBody.innerHTML = allMov.map(m => {
+                const isEntry = m.type === 'entry';
+                return `<div class="recent-item">
+                    <div class="recent-item-left">
+                        <div class="recent-item-icon ${isEntry ? 'entry' : 'withdraw'}"><i class="fas fa-${isEntry ? 'arrow-down' : 'arrow-up'}"></i></div>
+                        <div class="recent-item-info">
+                            <span class="recent-item-amount ${isEntry ? 'entry' : 'withdraw'}">${isEntry ? '+' : '-'}${fmt(m.amount)}</span>
+                            <span class="recent-item-date">${fmtDate(m.date)} — ${m._tag}</span>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+    }
+
+    // ─── Exposed Actions ───
+    window.__deleteTransaction = function (id) { deleteTransaction(id); };
+    window.__deleteWithdrawal = function (id) { deleteWithdrawal(id); };
+    window.__deleteEmployee = function (id) { deleteEmployee(id); };
+
+    window.__grantAppAccess = function (id) {
+        const emp = employees.find(e => e.id === id);
+        if (!emp) return;
+        const body = `
+            <div class="form-group">
+                <label><i class="fas fa-user"></i> Funcionário</label>
+                <input type="text" value="${emp.name}" disabled style="opacity:0.6">
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-building"></i> Sector de entrada atribuído</label>
+                <input type="text" value="${getSectorName(emp.sectorId)}" disabled style="opacity:0.6">
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-envelope"></i> Email de acesso</label>
+                <input type="email" id="grantEmail" placeholder="email@empresa.com" required>
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-lock"></i> Palavra-passe</label>
+                <input type="text" id="grantPassword" value="${emp.name.split(' ')[0].toLowerCase()}123" required>
+            </div>
+        `;
+        openModal('Dar Acesso ao App — ' + emp.name, body,
+            '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
+            '<button class="btn-primary" onclick="window.__confirmGrantAccess(\'' + id + '\')"><i class="fas fa-check"></i> Conceder Acesso</button>');
+    };
+
+    window.__confirmGrantAccess = async function (id) {
+        const emp = employees.find(e => e.id === id);
+        if (!emp) return;
+        const email = $('#grantEmail').value.trim();
+        const password = $('#grantPassword').value.trim();
+        if (!email) return showToast('Introduza o email.', 'error');
+        if (!password || password.length < 3) return showToast('A palavra-passe deve ter no mínimo 3 caracteres.', 'error');
+
+        const { data, error } = await supabase.rpc('create_employee_user', {
+            p_email: email,
+            p_password: password,
+            p_name: emp.name,
+            p_employee_id: emp.id,
+            p_sector_id: emp.sectorId
+        });
+
+        if (error) return showToast('Erro ao criar acesso: ' + error.message, 'error');
+        if (data?.error) return showToast(data.error, 'error');
+
+        closeModal();
+        renderEmployees();
+        showToast('Acesso concedido a ' + emp.name + '!', 'success');
+    };
+
+    window.__paySalary = function (id) {
+        const emp = employees.find(e => e.id === id);
+        if (!emp) return showToast('Funcionário não encontrado.', 'error');
+        const now = new Date().toISOString().slice(0, 10);
+        const body = `
+            <div class="form-group">
+                <label><i class="fas fa-user"></i> Funcionário</label>
+                <input type="text" value="${emp.name}" disabled style="opacity:0.6">
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-money-bill"></i> Valor do Salário</label>
+                <input type="text" value="${fmt(emp.salary)}" disabled style="opacity:0.6">
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-piggy-bank"></i> Debitar de</label>
+                <input type="text" value="${getRuleName(emp.fundId)}" disabled style="opacity:0.6">
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-calendar"></i> Data do Pagamento</label>
+                <input type="date" id="payDate" value="${now}">
+            </div>
+        `;
+        openModal('Pagar Salário', body,
+            '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
+            '<button class="btn-danger" onclick="window.__confirmPaySalary(\'' + id + '\')"><i class="fas fa-check"></i> Confirmar Pagamento</button>');
+    };
+
+    window.__confirmPaySalary = function (id) {
+        const date = $('#payDate').value;
+        if (!date) return showToast('Seleccione a data do pagamento.', 'error');
+        paySalary(id, date);
+        closeModal();
+    };
+
+    window.__deleteSalaryPayment = function (id) { deleteSalaryPayment(id); };
+
+    function iconPickerHTML(selected) {
+        return '<div class="icon-picker">' + SECTOR_ICONS.map(i =>
+            '<span class="icon-option' + (i === selected ? ' active' : '') + '" data-icon="' + i + '"><i class="fas fa-' + i + '"></i></span>'
+        ).join('') + '</div>';
+    }
+
+    window.__editSector = function (id) {
+        const sector = sectors.find(s => s.id === id);
+        if (!sector) return;
+        const logoPreview = sector.logo ? `<div class="logo-preview"><img src="${sector.logo}" class="logo-preview-img"><button type="button" class="btn-danger btn-sm" onclick="document.getElementById('modalSectorLogo').value='';document.getElementById('logoPreviewArea').innerHTML='';document.getElementById('logoPreviewArea').style.display='none'"><i class="fas fa-trash-can"></i></button></div>` : '';
+        const body = `
+            <div class="form-group">
+                <label>Nome do Sector</label>
+                <input type="text" id="modalSectorName" value="${sector.name}" placeholder="Nome do sector">
+            </div>
+            <div class="form-group">
+                <label>Logótipo Personalizado</label>
+                <input type="file" id="modalSectorLogo" accept="image/*" style="font-size:0.85rem">
+                <div id="logoPreviewArea" style="margin-top:8px">${logoPreview}</div>
+                <p class="form-hint">Faça upload de uma imagem (PNG, JPG) para usar como logótipo do sector</p>
+            </div>
+        `;
+        openModal('Editar Sector', body,
+            '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
+            '<button class="btn-primary" onclick="window.__saveSector(\'' + id + '\')">Guardar</button>');
+        // Init file preview
+        setTimeout(() => {
+            const fileInput = $('#modalSectorLogo');
+            if (fileInput) {
+                fileInput.addEventListener('change', function () {
+                    const file = this.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function (e) {
+                        const area = $('#logoPreviewArea');
+                        area.style.display = '';
+                        area.innerHTML = `<div class="logo-preview"><img src="${e.target.result}" class="logo-preview-img"></div>`;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+        }, 50);
+    };
+
+    window.__saveSector = function (id) {
+        const name = $('#modalSectorName').value.trim();
+        if (!name) return showToast('O nome do sector é obrigatório.', 'error');
+        const logoPreview = $('#logoPreviewArea');
+        const logoImg = logoPreview ? logoPreview.querySelector('.logo-preview-img') : null;
+        const logo = logoImg ? logoImg.src : null;
+        updateSector(id, name, logo);
+        closeModal();
+    };
+
+    window.__deleteSector = function (id) { deleteSectorDB(id); };
+
+    window.__addSector = function () {
+        openModal('Novo Sector de Entrada',
+            '<div class="form-group"><label>Nome do Sector</label><input type="text" id="modalSectorName" placeholder="Ex: Parcerias"></div>' +
+            '<div class="form-group"><label>Logótipo Personalizado</label><input type="file" id="modalSectorLogo" accept="image/*" style="font-size:0.85rem"><div id="logoPreviewArea" style="margin-top:8px;display:none"></div><p class="form-hint">Faça upload de uma imagem (PNG, JPG) para usar como logótipo do sector</p></div>',
+            '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
+            '<button class="btn-primary" onclick="window.__confirmAddSector()">Adicionar</button>');
+        setTimeout(() => {
+            const fileInput = $('#modalSectorLogo');
+            if (fileInput) {
+                fileInput.addEventListener('change', function () {
+                    const file = this.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function (e) {
+                        const area = $('#logoPreviewArea');
+                        area.style.display = '';
+                        area.innerHTML = `<div class="logo-preview"><img src="${e.target.result}" class="logo-preview-img"></div>`;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+        }, 50);
+    };
+
+    window.__confirmAddSector = function () {
+        const name = $('#modalSectorName').value.trim();
+        if (!name) return showToast('O nome do sector é obrigatório.', 'error');
+        const logoPreview = $('#logoPreviewArea');
+        const logoImg = logoPreview ? logoPreview.querySelector('.logo-preview-img') : null;
+        const logo = logoImg ? logoImg.src : null;
+        addSector(name, logo);
+        closeModal();
+    };
+
+    window.__updateRulePercent = function (id, val) {
+        updateRulePercent(id, val);
+    };
+
+    window.__editRuleLogo = function (id) {
+        const rule = rules.find(r => r.id === id);
+        if (!rule) return;
+        const logoPreview = rule.logo ? `<div class="logo-preview"><img src="${rule.logo}" class="logo-preview-img"></div>` : '';
+        openModal('Logótipo — ' + rule.name,
+            '<div class="form-group"><label>Imagem do Logótipo</label><input type="file" id="modalRuleLogo" accept="image/*" style="font-size:0.85rem"><div id="ruleLogoPreviewArea" style="margin-top:8px">' + logoPreview + '</div><p class="form-hint">Faça upload de uma imagem (PNG, JPG) para representar este fundo</p></div>',
+            '<button class="btn-secondary" onclick="window.__closeModal()">Cancelar</button>' +
+            '<button class="btn-primary" onclick="window.__saveRuleLogo(\'' + id + '\')">Guardar</button>');
+        setTimeout(() => {
+            const fileInput = $('#modalRuleLogo');
+            if (fileInput) {
+                fileInput.addEventListener('change', function () {
+                    const file = this.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function (e) {
+                        const area = $('#ruleLogoPreviewArea');
+                        area.innerHTML = `<div class="logo-preview"><img src="${e.target.result}" class="logo-preview-img"></div>`;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+        }, 50);
+    };
+
+    window.__saveRuleLogo = function (id) {
+        const preview = $('#ruleLogoPreviewArea');
+        const img = preview ? preview.querySelector('.logo-preview-img') : null;
+        const logo = img ? img.src : null;
+        updateRuleLogo(id, logo);
+        closeModal();
+    };
+
+    window.__removeRuleLogo = function (id) {
+        if (!confirm('Remover logótipo deste fundo?')) return;
+        updateRuleLogo(id, null);
+        closeModal();
+    };
+
+    window.__closeModal = closeModal;
+
+    // ─── Refresh & Sync ───
+    function refreshAll() {
+        if (currentPage === 'dashboard') renderDashboard();
+        if (currentPage === 'register') populateSectorSelect();
+        if (currentPage === 'employees') renderEmployees();
+        if (currentPage === 'withdraw') { populateWithdrawFundSelect(); renderWithdrawHistory(); }
+        if (currentPage === 'history') renderHistory();
+        if (currentPage === 'reports') renderReports();
+        if (currentPage === 'admin') renderAdmin();
+    }
+
+    // ─── Init ───
+    function init() {
+        // Listen for auth changes (only for Supabase token refresh)
+        supabase.auth.onAuthStateChange((event, session) => {
+            supabaseSession = session;
+        });
+
+        const now = new Date();
+        $('#currentDate').textContent = now.toLocaleDateString('pt-AO', {
+            weekday: 'long', day: '2-digit', month: 'long', year: 'numeric'
+        });
+
+        // Load from localStorage
+        const hasLocal = loadLocal();
+        // Seed defaults if first run
+        if (sectors.length === 0 && rules.length === 0) {
+            DEFAULT_SECTORS.forEach(s => sectors.push({ id: uuid(), ...s, icon: s.icon || 'building', logo: null }));
+            DEFAULT_RULES.forEach(r => rules.push({ id: uuid(), ...r, logo: null }));
+            saveLocal();
+        }
+
+        // Always show login screen first
+        hideApp();
+        if (hasLocal) refreshAll();
+
+        // ─── Login Form ───
+        $('#loginForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const btn = this.querySelector('button[type="submit"]');
+            const email = $('#loginEmail').value.trim();
+            const password = $('#loginPassword').value;
+            const ok = doLogin(email, password);
+            if (ok) {
+                refreshAll();
+                syncToSupabase();
+                showToast('Bem-vindo ao EGESTOR 2.0!', 'success');
+            } else {
+                showToast('Email ou palavra-passe incorrectos.', 'error');
+            }
+        });
+
+        // ─── Logout ───
+        $('#logoutBtn').addEventListener('click', doLogout);
+
+        // ─── Navigation ───
+        $$('.nav-item').forEach(item => {
+            item.addEventListener('click', function (e) {
+                e.preventDefault();
+                navigate(this.dataset.page);
+            });
+        });
+
+        // Menu toggle
+        $('#menuToggle').addEventListener('click', function () {
+            $('#sidebar').classList.toggle('open');
+        });
+
+        document.addEventListener('click', function (e) {
+            const sidebar = $('#sidebar');
+            const toggle = $('#menuToggle');
+            if (window.innerWidth <= 768 && sidebar.classList.contains('open') &&
+                !sidebar.contains(e.target) && !toggle.contains(e.target)) {
+                sidebar.classList.remove('open');
+            }
+        });
+
+        // ─── Entry Form ───
+        $('#entryForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const date = $('#entryDate').value;
+            const amount = parseFloat($('#entryAmount').value);
+            const sectorId = getRegisterSectorId();
+            const description = $('#entryDescription').value.trim();
+            if (!date) return showToast('Seleccione a data de entrada.', 'error');
+            if (!amount || amount <= 0) return showToast('Introduza um valor válido.', 'error');
+            if (!sectorId) return showToast('Seleccione o sector de entrada.', 'error');
+            addTransaction({ date, amount, sectorId, description });
+            this.reset();
+            document.getElementById('entryDate').valueAsDate = new Date();
+            $('#distributionPreview').style.display = 'none';
+        });
+
+        $('#entryAmount').addEventListener('input', function () {
+            const val = parseFloat(this.value);
+            updateDistributionPreview(val > 0 ? val : 0);
+        });
+
+        // ─── Withdraw Form ───
+        $('#withdrawForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const date = $('#withdrawDate').value;
+            const amount = parseFloat($('#withdrawAmount').value);
+            const fundId = $('#withdrawFund').value;
+            const description = $('#withdrawDescription').value.trim();
+            if (!date) return showToast('Seleccione a data da retirada.', 'error');
+            if (!amount || amount <= 0) return showToast('Introduza um valor válido.', 'error');
+            if (!fundId) return showToast('Seleccione o fundo de origem.', 'error');
+            const balance = getFundBalance(fundId);
+            if (amount > balance) return showToast('Saldo insuficiente neste fundo.', 'error');
+            addWithdrawal({ date, amount, fundId, description });
+            this.reset();
+            document.getElementById('withdrawDate').valueAsDate = new Date();
+            updateFundBalanceDisplay();
+        });
+
+        $('#withdrawAmount').addEventListener('input', function () {
+            const fundId = $('#withdrawFund').value;
+            if (fundId) updateFundBalanceDisplay();
+        });
+
+        $('#withdrawFund').addEventListener('change', updateFundBalanceDisplay);
+
+        // ─── Employee Form ───
+        $('#employeeForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const name = $('#empName').value.trim();
+            const salary = parseFloat($('#empSalary').value);
+            const fundId = $('#empFund').value;
+            const sectorId = $('#empSector').value;
+            if (!name) return showToast('Introduza o nome do funcionário.', 'error');
+            if (!salary || salary <= 0) return showToast('Introduza um salário válido.', 'error');
+            if (!fundId) return showToast('Seleccione o fundo para débito.', 'error');
+            if (!sectorId) return showToast('Seleccione o sector de entrada.', 'error');
+            addEmployee({ name, salary, fundId, sectorId });
+            this.reset();
+        });
+
+        // ─── History Filters ───
+        $('#filterDate').addEventListener('change', renderHistory);
+        $('#filterSector').addEventListener('change', renderHistory);
+        $('#filterType').addEventListener('change', renderHistory);
+        $('#clearFilters').addEventListener('click', function () {
+            $('#filterDate').value = '';
+            $('#filterSector').value = '';
+            $('#filterType').value = '';
+            renderHistory();
+        });
+
+        // ─── Export CSV ───
+        $('#exportCSV').addEventListener('click', function () {
+            const all = [
+                ...transactions.map(t => ({ ...t, _exportType: 'Entrada', _exportFund: getSectorName(t.sectorId) })),
+                ...withdrawals.map(w => ({ ...w, _exportType: 'Retirada', _exportFund: getRuleName(w.fundId), distribution: [] }))
+            ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+            if (all.length === 0) return showToast('Não há dados para exportar.', 'warning');
+
+            const rows = [['Data', 'Tipo', 'Valor', 'Sector/Fundo', 'Descrição',
+                rules[0] ? rules[0].name : 'F. Pessoal',
+                rules[1] ? rules[1].name : 'F. Investimento',
+                rules[2] ? rules[2].name : 'F. Caixa'
+            ]];
+            all.forEach(m => {
+                const distMap = {};
+                (m.distribution || []).forEach(d => {
+                    const rule = rules.find(r => r.id === d.ruleId);
+                    if (rule) distMap[rule.id] = d.amount.toFixed(2);
+                });
+                rows.push([
+                    m.date,
+                    m._exportType,
+                    (m.type === 'withdraw' ? '-' : '') + m.amount.toFixed(2),
+                    m._exportFund,
+                    m.description || '',
+                    m.type === 'entry' ? (distMap[rules[0]?.id] || '0.00') : '—',
+                    m.type === 'entry' ? (distMap[rules[1]?.id] || '0.00') : '—',
+                    m.type === 'entry' ? (distMap[rules[2]?.id] || '0.00') : '—'
+                ]);
+            });
+            const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+            const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'egestor_dados_' + new Date().toISOString().slice(0, 10) + '.csv';
+            link.click();
+            URL.revokeObjectURL(link.href);
+            showToast('Dados exportados com sucesso!', 'success');
+        });
+
+        // ─── Reports ───
+        const nowMonth = now.toISOString().slice(0, 7);
+        const nowDate = now.toISOString().slice(0, 10);
+        $('#reportMonth').value = nowMonth;
+        $('#reportDate').value = nowDate;
+        $('#reportYear').value = now.getFullYear();
+
+        $('#reportDate').style.display = 'none';
+        $('#reportYear').style.display = 'none';
+
+        $('#reportPeriod').addEventListener('change', renderReports);
+        $('#reportDate').addEventListener('change', renderReports);
+        $('#reportMonth').addEventListener('change', renderReports);
+        $('#reportYear').addEventListener('input', renderReports);
+        $('#generateReport').addEventListener('click', renderReports);
+
+        $('#exportReportPDF').addEventListener('click', function () {
+            window.print();
+        });
+
+        // ─── Admin ───
+        $('#addSectorBtn').addEventListener('click', window.__addSector);
+
+        // ─── Modal ───
+        $('#modalClose').addEventListener('click', closeModal);
+        $('#modalOverlay').addEventListener('click', function (e) {
+            if (e.target === this) closeModal();
+        });
+
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+})();
