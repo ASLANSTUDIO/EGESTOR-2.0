@@ -2,8 +2,8 @@
     'use strict';
 
     // ─── Supabase Config ───
-    const SUPABASE_URL = 'https://gxncdimqptgkdsuxpqnt.supabase.co';
-    const SUPABASE_ANON_KEY = 'sb_publishable_QyJRrWHSBPXKZecoPeEVjw_GrHwCYzh';
+    const SUPABASE_URL = 'https://bwwkftxdblxmioghjldu.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_U6N79tV3sToBI-iz_OXLAg_TSBR2VyI';
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: {
             autoRefreshToken: true,
@@ -11,6 +11,10 @@
             detectSessionInUrl: false
         }
     });
+
+    // ─── Admin Credentials (altere aqui) ───
+    const ADMIN_EMAIL = 'admin@egestor.com';
+    const ADMIN_PASSWORD = 'Josi@s99401';
 
     // ─── Default Data ───
     const SECTOR_ICONS = ['store','building','handshake','laptop-code','wrench','truck','headset','chart-line','file-invoice','gear','users-gear','scale-balanced','tree-city','industry','ship','plane','credit-card','globe','rocket','gem','graduation-cap','dumbbell','heart-pulse','leaf','cart-shopping','gavel','piggy-bank','sack-dollar','oil-well','car'];
@@ -261,8 +265,8 @@
 
     // ─── Auth (local first, Supabase opcional) ───
     function doLogin(email, password) {
-        // Admin hardcoded para funcionar offline
-        if (email !== 'admin@egestor.com' || password !== 'admin123') {
+        // Admin local para funcionar offline
+        if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
             return false;
         }
         currentUser = { id: 'local-admin', email: 'admin@egestor.com', name: 'Administrador', role: 'admin', sectorId: null, employeeId: null };
